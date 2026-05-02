@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
 
 
@@ -169,8 +172,102 @@ class FakeLLMClient(BaseLLMClient):
                 "message": "Bug Intake created a structured bug report.",
             }
         elif agent == "supervisor":
-            user_text = str(payload.get("user_text", "")).lower()
-            if "run all" in user_text or "run_all" in user_text:
+            original_text = str(payload.get("user_text", ""))
+            user_text = original_text.lower()
+            task_match = re.search(r"\b(?:task|bug)-\d+\b", user_text, flags=re.IGNORECASE)
+            rel_match = re.search(r"\brel-\d+\b", user_text, flags=re.IGNORECASE)
+            adr_match = re.search(r"\badr-\d+\b", user_text, flags=re.IGNORECASE)
+            task_id = task_match.group(0).lower() if task_match else None
+            rel_id = rel_match.group(0).lower() if rel_match else None
+            adr_id = adr_match.group(0).lower() if adr_match else None
+
+            if any(token in user_text for token in ("какой сейчас фокус", "что мы обсуждаем", "show focus", "current focus")):
+                data = {
+                    "intent": "focus",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "focus", "args": {}},
+                    "explanation": "The user asks for current conversation focus.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("сбрось фокус", "clear focus")):
+                data = {
+                    "intent": "clear_focus",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "clear_focus", "args": {}},
+                    "explanation": "The user asks to clear conversation focus.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("обсудим релиз", "focus release", "фокус на rel-")) and rel_id:
+                data = {
+                    "intent": "set_focus_release",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "set_focus_release", "args": {"id": rel_id.upper()}},
+                    "explanation": "The user asks to set release focus.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("фокус на adr-", "focus decision")) and adr_id:
+                data = {
+                    "intent": "set_focus_decision",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "set_focus_decision", "args": {"id": adr_id.upper()}},
+                    "explanation": "The user asks to set decision focus.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("обсудим ", "переключись на", "focus on", "фокус на")) and task_id:
+                data = {
+                    "intent": "set_focus_task",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "set_focus_task", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to set task focus.",
+                    "warnings": [],
+                }
+            elif ("добавь заметку" in user_text or "add note" in user_text) and not task_id:
+                if ":" in original_text:
+                    note_text = original_text.split(":", 1)[1].strip()
+                else:
+                    note_text = original_text.strip()
+                data = {
+                    "intent": "add_task_note",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "add_task_note", "args": {"text": note_text, "author": "user"}},
+                    "explanation": "The user asks to add a note, task ID may come from active focus.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("подготовь её к разработке", "подготовь ее к разработке", "prepare it")):
+                data = {
+                    "intent": "prepare_task_for_dev",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "prepare_task_for_dev", "args": {}},
+                    "explanation": "The user asks to prepare active task for development.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("что по ней", "what about it", "status for it")):
+                data = {
+                    "intent": "task_status",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "task_status", "args": {}},
+                    "explanation": "The user asks for active task status.",
+                    "warnings": [],
+                }
+            elif "run command " in user_text:
+                command = original_text.split("run command", 1)[1].strip()
+                data = {
+                    "intent": "run_command",
+                    "confidence": 0.95,
+                    "requires_confirmation": True,
+                    "action": {"name": "run_command", "args": {"command": command}},
+                    "explanation": "Running commands is a risky action and requires explicit confirmation.",
+                    "warnings": ["Requires explicit confirmation."],
+                }
+            elif "run all" in user_text or "run_all" in user_text:
                 data = {
                     "intent": "run_all",
                     "confidence": 0.8,
@@ -178,6 +275,24 @@ class FakeLLMClient(BaseLLMClient):
                     "action": {"name": "run_all", "args": {}},
                     "explanation": "Running all tasks is a risky bulk action.",
                     "warnings": ["Requires explicit confirmation."],
+                }
+            elif "show task " in user_text and task_id:
+                data = {
+                    "intent": "show_task",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "show_task", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to show a specific task.",
+                    "warnings": [],
+                }
+            elif ("run next " in user_text or "прогони " in user_text) and task_id:
+                data = {
+                    "intent": "run_next",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "run_next", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to run workflow for a specific task.",
+                    "warnings": [],
                 }
             elif any(token in user_text for token in ("bug", "баг", "error", "500")):
                 data = {
@@ -193,6 +308,218 @@ class FakeLLMClient(BaseLLMClient):
                         },
                     },
                     "explanation": "The request describes a bug report.",
+                    "warnings": [],
+                }
+            elif "repo search " in user_text:
+                query = str(payload.get("user_text", "")).split("repo search", 1)[1].strip()
+                data = {
+                    "intent": "repo_search",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "repo_search", "args": {"query": query}},
+                    "explanation": "The user requests repository text search.",
+                    "warnings": [],
+                }
+            elif "repo file " in user_text:
+                path = str(payload.get("user_text", "")).split("repo file", 1)[1].strip()
+                data = {
+                    "intent": "repo_file",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "repo_file", "args": {"path": path}},
+                    "explanation": "The user requests a repository file preview.",
+                    "warnings": [],
+                }
+            elif any(
+                token in user_text
+                for token in (
+                    "show managed project",
+                    "каким проектом ты управляешь",
+                    "каким проектом управляешь",
+                )
+            ):
+                data = {
+                    "intent": "managed_project",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "managed_project", "args": {}},
+                    "explanation": "The user asks which project is managed.",
+                    "warnings": [],
+                }
+            elif any(
+                token in user_text
+                for token in (
+                    "managed project check",
+                    "проверь managed project",
+                    "проверь целевой проект",
+                )
+            ):
+                data = {
+                    "intent": "managed_project_check",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "managed_project_check", "args": {}},
+                    "explanation": "The user asks to validate managed project path.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("статус проекта", "project status")):
+                data = {
+                    "intent": "project_status",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "project_status", "args": {}},
+                    "explanation": "The user asks for project status.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("что дальше", "what should i do next", "next work")):
+                data = {
+                    "intent": "next_work",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "next_work", "args": {}},
+                    "explanation": "The user asks for next recommended work.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("что заблокировано", "what is blocked", "blockers")):
+                data = {
+                    "intent": "blockers_summary",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "blockers_summary", "args": {}},
+                    "explanation": "The user asks for blockers summary.",
+                    "warnings": [],
+                }
+            elif ("статус task-" in user_text or "task status " in user_text) and task_id:
+                data = {
+                    "intent": "task_status",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "task_status", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks for task status.",
+                    "warnings": [],
+                }
+            elif ("обсудим " in user_text or "discussion " in user_text) and task_id:
+                data = {
+                    "intent": "summarize_task_discussion",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "summarize_task_discussion", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to discuss a task and see note summary.",
+                    "warnings": [],
+                }
+            elif "добавь заметку к " in user_text and task_id:
+                original = str(payload.get("user_text", ""))
+                if ":" in original:
+                    note_text = original.split(":", 1)[1].strip()
+                else:
+                    after = original.upper().split(task_id.upper(), 1)[1] if task_id.upper() in original.upper() else ""
+                    note_text = after.strip() or "Новая заметка."
+                data = {
+                    "intent": "add_task_note",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "add_task_note", "args": {"id": task_id.upper(), "text": note_text, "author": "user"}},
+                    "explanation": "The user asks to add a note to the task.",
+                    "warnings": [],
+                }
+            elif ("подготовь " in user_text and "к разработке" in user_text) and task_id:
+                data = {
+                    "intent": "prepare_task_for_dev",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "prepare_task_for_dev", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to prepare task for development.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("продвинь task-", "advance task ")) and task_id:
+                data = {
+                    "intent": "advance_task_safely",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "advance_task_safely", "args": {"id": task_id.upper()}},
+                    "explanation": "The user asks to advance task safely.",
+                    "warnings": [],
+                }
+            elif ("статус релиза" in user_text or "release summary" in user_text) and rel_id:
+                data = {
+                    "intent": "release_summary",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "release_summary", "args": {"id": rel_id.upper()}},
+                    "explanation": "The user asks for release summary.",
+                    "warnings": [],
+                }
+            elif "release notes" in user_text and rel_id:
+                data = {
+                    "intent": "release_notes",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "release_notes", "args": {"id": rel_id.upper()}},
+                    "explanation": "The user asks for release notes.",
+                    "warnings": [],
+                }
+            elif "release readiness" in user_text and rel_id:
+                data = {
+                    "intent": "release_readiness",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "release_readiness", "args": {"id": rel_id.upper()}},
+                    "explanation": "The user asks for release readiness.",
+                    "warnings": [],
+                }
+            elif "rollback" in user_text and rel_id:
+                data = {
+                    "intent": "rollback_plan",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "rollback_plan", "args": {"id": rel_id.upper()}},
+                    "explanation": "The user asks for release rollback plan.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("decisions", "решения")):
+                data = {
+                    "intent": "list_decisions",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "list_decisions", "args": {}},
+                    "explanation": "The user asks to list decisions.",
+                    "warnings": [],
+                }
+            elif "decision " in user_text and adr_id:
+                data = {
+                    "intent": "show_decision",
+                    "confidence": 0.95,
+                    "requires_confirmation": False,
+                    "action": {"name": "show_decision", "args": {"id": adr_id.upper()}},
+                    "explanation": "The user asks to show a specific decision.",
+                    "warnings": [],
+                }
+            elif "create release" in user_text:
+                name = str(payload.get("user_text", "")).split("create release", 1)[1].strip() or "v0.1.0"
+                data = {
+                    "intent": "create_release",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "create_release", "args": {"name": name}},
+                    "explanation": "The user requests release creation.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("ready", "готовые")):
+                data = {
+                    "intent": "ready",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "ready", "args": {}},
+                    "explanation": "The user requests ready tasks.",
+                    "warnings": [],
+                }
+            elif any(token in user_text for token in ("blocked", "заблокированные")):
+                data = {
+                    "intent": "blocked",
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "blocked", "args": {}},
+                    "explanation": "The user requests blocked tasks.",
                     "warnings": [],
                 }
             elif any(token in user_text for token in ("task", "задач")):
@@ -246,6 +573,8 @@ class FakeLLMClient(BaseLLMClient):
                     "explanation": "The request is ambiguous. Please clarify the desired action.",
                     "warnings": [],
                 }
+        elif agent == "smoke":
+            data = {"ok": True, "provider": self.provider_name, "echo": payload.get("prompt", "")}
         else:
             raise LLMClientError(f"Unsupported agent for fake provider: {agent}")
 
@@ -291,6 +620,50 @@ class OpenAILLMClient(BaseLLMClient):
         raise LLMClientError("OpenAI response did not contain output_text.")
 
 
+class ClaudeCodeLLMClient(BaseLLMClient):
+    provider_name = "claude_code"
+
+    def __init__(self, binary: str = "claude", timeout_seconds: int = 120):
+        self.binary = (binary or "claude").strip() or "claude"
+        self.timeout_seconds = int(timeout_seconds)
+        if self.timeout_seconds <= 0:
+            raise LLMClientError("CLAUDE_CODE_TIMEOUT_SECONDS must be a positive integer.")
+
+    def generate(self, payload: dict) -> str:
+        prompt = json.dumps(payload, ensure_ascii=False)
+        if shutil.which(self.binary) is None:
+            raise LLMClientError(
+                f"Claude Code binary not found: '{self.binary}'. "
+                "Install Claude Code and/or set CLAUDE_CODE_BINARY."
+            )
+
+        try:
+            completed = subprocess.run(
+                [self.binary, "-p", prompt],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                check=False,
+                shell=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LLMClientError(
+                f"Claude Code request timed out after {self.timeout_seconds} seconds."
+            ) from exc
+        except OSError as exc:
+            raise LLMClientError(f"Failed to execute Claude Code binary '{self.binary}': {exc}") from exc
+
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+
+        if completed.returncode != 0:
+            details = stderr or stdout or f"exit code {completed.returncode}"
+            raise LLMClientError(f"Claude Code command failed: {details}")
+        if not stdout:
+            raise LLMClientError("Claude Code returned empty output.")
+        return stdout
+
+
 def get_llm_client(provider: str | None = None) -> BaseLLMClient:
     selected = (provider or os.getenv("LLM_PROVIDER") or "fake").strip().lower()
 
@@ -303,5 +676,14 @@ def get_llm_client(provider: str | None = None) -> BaseLLMClient:
             raise LLMClientError("OPENAI_API_KEY is required when LLM_PROVIDER=openai.")
         model = (os.getenv("OPENAI_MODEL") or "gpt-5.1-mini").strip() or "gpt-5.1-mini"
         return OpenAILLMClient(api_key=api_key, model=model)
+
+    if selected == "claude_code":
+        binary = (os.getenv("CLAUDE_CODE_BINARY") or "claude").strip() or "claude"
+        timeout_raw = (os.getenv("CLAUDE_CODE_TIMEOUT_SECONDS") or "120").strip() or "120"
+        try:
+            timeout = int(timeout_raw)
+        except ValueError as exc:
+            raise LLMClientError("CLAUDE_CODE_TIMEOUT_SECONDS must be an integer.") from exc
+        return ClaudeCodeLLMClient(binary=binary, timeout_seconds=timeout)
 
     raise LLMClientError(f"Unsupported LLM provider: {selected}")

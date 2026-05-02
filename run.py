@@ -1,12 +1,29 @@
 import argparse
 import json
 import os
+import shlex
+import shutil
 import sys
+from pathlib import Path
 
 import backlog
+import decision_log
 import orchestrator
+import release_manager
 from command_runner import ALLOWED_COMMANDS, is_command_allowed, run_safe_command
+from conversation_context import (
+    append_message,
+    clear_focus,
+    get_focus,
+    get_or_create_session,
+    load_sessions,
+    set_active_decision,
+    set_active_release,
+    set_active_task,
+)
+from decision_log import load_decision_index
 from llm_client import LLMClientError, get_llm_client
+from managed_project import get_managed_project_info, get_managed_repo_path, validate_managed_repo_path
 from decision_log import (
     create_decision,
     get_decision_by_id,
@@ -30,6 +47,18 @@ from orchestrator import (
     validate_all_tasks,
 )
 from patch_utils import apply_patch_proposal, approve_patch, export_patch_proposal
+from project_manager import (
+    add_task_note,
+    advance_task_safely,
+    get_blockers_summary,
+    get_next_work_recommendation,
+    get_project_status,
+    get_release_summary,
+    get_task_status,
+    list_task_notes,
+    prepare_task_for_development,
+    summarize_task_discussion,
+)
 from project_context_loader import load_project_context, load_project_context_text, list_project_context_files
 from release_manager import (
     add_task_to_release,
@@ -45,6 +74,8 @@ from release_manager import (
     save_releases,
     set_release_status,
 )
+import storage
+import speech_to_text
 from repo_inspector import (
     build_repository_context_for_task,
     list_repository_tree,
@@ -60,6 +91,31 @@ from supervisor import (
     execute_supervisor_action,
     plan_supervisor_action,
 )
+
+CRITICAL_REQUIRED_DIRECTORIES = [
+    "agents",
+    "project_context",
+    "tasks",
+    "releases",
+    "decisions",
+    "artifacts",
+    "docs",
+]
+
+CRITICAL_REQUIRED_FILES = [
+    "README.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "tasks/tasks.json",
+    "releases/releases.json",
+    "decisions/index.json",
+    "agents/analyst.md",
+    "agents/architect.md",
+    "agents/developer.md",
+    "agents/qa.md",
+    "agents/bug_intake.md",
+    "agents/supervisor.md",
+]
 
 
 def _format_plan_markdown(task_id: str, plan: dict) -> str:
@@ -370,7 +426,7 @@ def cmd_approve_patch(args):
 
 def cmd_apply_patch(args):
     tasks, task = _load_task_for_update(args.id)
-    result = apply_patch_proposal(task, repo_root=".", force=args.force)
+    result = apply_patch_proposal(task, repo_root=None, force=args.force)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["errors"]:
         add_history_event(task, "Patch proposal applied.", agent="orchestrator")
@@ -422,7 +478,7 @@ def cmd_commands(_args):
 def cmd_run_command(args):
     tasks, task = _load_task_for_update(args.id)
     orchestrator.validate_task(task)
-    result = run_safe_command(args.command, cwd=".", timeout_seconds=args.timeout)
+    result = run_safe_command(args.command, cwd=None, timeout_seconds=args.timeout)
     result["source"] = "manual"
     task["artifacts"]["command_results"].append(result)
     add_history_event(task, f"Executed command: {args.command}", agent="orchestrator")
@@ -444,7 +500,7 @@ def cmd_run_plan_commands(args):
         if not isinstance(command, str) or not is_command_allowed(command):
             skipped.append(command)
             continue
-        result = run_safe_command(command, cwd=".", timeout_seconds=args.timeout)
+        result = run_safe_command(command, cwd=None, timeout_seconds=args.timeout)
         result["source"] = "implementation_plan"
         task["artifacts"]["command_results"].append(result)
         executed.append(command)
@@ -506,10 +562,641 @@ def cmd_config(_args):
     provider = (os.getenv("LLM_PROVIDER") or "fake").strip().lower()
     model = (os.getenv("OPENAI_MODEL") or "gpt-5.1-mini").strip() or "gpt-5.1-mini"
     has_key = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    claude_binary = (os.getenv("CLAUDE_CODE_BINARY") or "claude").strip() or "claude"
+    claude_timeout = (os.getenv("CLAUDE_CODE_TIMEOUT_SECONDS") or "120").strip() or "120"
+    anthropic_key_set = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+    storage_backend = (os.getenv("STORAGE_BACKEND") or "json").strip().lower()
+    sqlite_db_path = (os.getenv("SQLITE_DB_PATH") or "data/team_agents.db").strip() or "data/team_agents.db"
+    stt_provider = (os.getenv("STT_PROVIDER") or "disabled").strip().lower()
+    ffmpeg_binary = (os.getenv("FFMPEG_BINARY") or "ffmpeg").strip() or "ffmpeg"
+    voice_work_dir = (os.getenv("VOICE_WORK_DIR") or ".tmp/voice").strip() or ".tmp/voice"
+    whisper_binary = (os.getenv("WHISPER_CLI_BINARY") or "whisper").strip() or "whisper"
+    whisper_model = (os.getenv("WHISPER_MODEL") or "small").strip() or "small"
+    whisper_language = (os.getenv("WHISPER_LANGUAGE") or "ru").strip() or "ru"
+    voice_keep_files = (os.getenv("VOICE_KEEP_FILES") or "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+    stt_custom_set = bool((os.getenv("STT_CUSTOM_COMMAND") or "").strip())
+    managed_path = get_managed_repo_path()
+    managed_validation = validate_managed_repo_path()
 
     print(f"LLM_PROVIDER={provider}")
+    print(f"STORAGE_BACKEND={storage_backend}")
+    print(f"SQLITE_DB_PATH={sqlite_db_path}")
+    print(f"MANAGED_REPO_PATH={managed_path}")
+    print(f"MANAGED_REPO_ROOT={managed_validation.get('managed_repo_root')}")
+    print(f"CLAUDE_CODE_BINARY={claude_binary}")
+    print(f"CLAUDE_CODE_TIMEOUT_SECONDS={claude_timeout}")
+    print(f"ANTHROPIC_API_KEY_SET={str(anthropic_key_set).lower()}")
     print(f"OPENAI_MODEL={model}")
     print(f"OPENAI_API_KEY_SET={str(has_key).lower()}")
+    print(f"STT_PROVIDER={stt_provider}")
+    print(f"FFMPEG_BINARY={ffmpeg_binary}")
+    print(f"VOICE_WORK_DIR={voice_work_dir}")
+    print(f"WHISPER_CLI_BINARY={whisper_binary}")
+    print(f"WHISPER_MODEL={whisper_model}")
+    print(f"WHISPER_LANGUAGE={whisper_language}")
+    print(f"VOICE_KEEP_FILES={str(voice_keep_files).lower()}")
+    print(f"STT_CUSTOM_COMMAND_SET={str(stt_custom_set).lower()}")
+    if provider == "claude_code" and anthropic_key_set:
+        print(
+            "WARNING: ANTHROPIC_API_KEY is set. Claude Code may use API billing instead of subscription "
+            "depending on Claude Code auth/config."
+        )
+
+
+def cmd_llm_smoke(args):
+    client = get_llm_client()
+    payload = {
+        "agent_name": "smoke",
+        "user_text": args.prompt,
+        "prompt": args.prompt,
+    }
+    text = client.generate(payload)
+    print(text)
+
+
+def cmd_telegram_config(_args):
+    token_set = bool((os.getenv("TELEGRAM_BOT_TOKEN") or "").strip())
+    owner_set = bool((os.getenv("TELEGRAM_OWNER_ID") or "").strip())
+    dry_run_default = (os.getenv("TELEGRAM_DRY_RUN_BY_DEFAULT") or "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    print(f"TELEGRAM_BOT_TOKEN_SET={str(token_set).lower()}")
+    print(f"TELEGRAM_OWNER_ID_SET={str(owner_set).lower()}")
+    print(f"TELEGRAM_DRY_RUN_BY_DEFAULT={str(dry_run_default).lower()}")
+    print(f"STT_PROVIDER={(os.getenv('STT_PROVIDER') or 'disabled').strip().lower()}")
+    print(f"FFMPEG_BINARY={(os.getenv('FFMPEG_BINARY') or 'ffmpeg').strip() or 'ffmpeg'}")
+    print(f"VOICE_WORK_DIR={(os.getenv('VOICE_WORK_DIR') or '.tmp/voice').strip() or '.tmp/voice'}")
+    print(f"WHISPER_CLI_BINARY={(os.getenv('WHISPER_CLI_BINARY') or 'whisper').strip() or 'whisper'}")
+    print(f"WHISPER_MODEL={(os.getenv('WHISPER_MODEL') or 'small').strip() or 'small'}")
+    print(f"WHISPER_LANGUAGE={(os.getenv('WHISPER_LANGUAGE') or 'ru').strip() or 'ru'}")
+    voice_keep = (os.getenv('VOICE_KEEP_FILES') or 'false').strip().lower() in {'1','true','yes','y','on'}
+    print(f"VOICE_KEEP_FILES={str(voice_keep).lower()}")
+    print(f"STT_CUSTOM_COMMAND_SET={str(bool((os.getenv('STT_CUSTOM_COMMAND') or '').strip())).lower()}")
+
+
+def cmd_managed_project(_args):
+    info = validate_managed_repo_path()
+    print("Управляемый проект:")
+    print(f"- system_root: {info['system_root']}")
+    print(f"- configured_path: {info['managed_repo_path']}")
+    print(f"- resolved_root: {info['managed_repo_root']}")
+    print(f"- exists: {'true' if info['exists'] else 'false'}")
+    print(f"- is_directory: {'true' if info['is_directory'] else 'false'}")
+    print(f"- has_git: {'true' if info['has_git'] else 'false'}")
+    print(f"- has_readme: {'true' if info['has_readme'] else 'false'}")
+    print(f"- sample_entries: {', '.join(info['sample_entries']) if info['sample_entries'] else '(empty)'}")
+    if info["warnings"]:
+        print("warnings:")
+        for item in info["warnings"]:
+            print(f"- {item}")
+    if info["errors"]:
+        print("errors:")
+        for item in info["errors"]:
+            print(f"- {item}")
+
+
+def cmd_managed_project_check(_args):
+    info = validate_managed_repo_path()
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+    if not info.get("valid"):
+        raise ValueError("Managed project path validation failed.")
+
+
+def cmd_telegram(_args):
+    from telegram_bot import load_telegram_config, start_polling_bot
+
+    load_telegram_config()
+    print("Telegram bot started in polling mode.")
+    start_polling_bot()
+
+
+def cmd_voice_config(_args):
+    provider = speech_to_text.get_stt_provider()
+    ffmpeg_binary = (os.getenv("FFMPEG_BINARY") or "ffmpeg").strip() or "ffmpeg"
+    work_dir = speech_to_text.get_voice_work_dir()
+    whisper_binary = (os.getenv("WHISPER_CLI_BINARY") or "whisper").strip() or "whisper"
+    whisper_model = (os.getenv("WHISPER_MODEL") or "small").strip() or "small"
+    whisper_language = (os.getenv("WHISPER_LANGUAGE") or "ru").strip() or "ru"
+    voice_keep = speech_to_text.should_keep_voice_files()
+    custom_set = bool((os.getenv("STT_CUSTOM_COMMAND") or "").strip())
+
+    print(f"STT_PROVIDER={provider}")
+    print(f"FFMPEG_BINARY={ffmpeg_binary}")
+    print(f"FFMPEG_FOUND={str(bool(shutil.which(ffmpeg_binary))).lower()}")
+    print(f"VOICE_WORK_DIR={work_dir}")
+    print(f"WHISPER_CLI_BINARY={whisper_binary}")
+    print(f"WHISPER_MODEL={whisper_model}")
+    print(f"WHISPER_LANGUAGE={whisper_language}")
+    print(f"VOICE_KEEP_FILES={str(voice_keep).lower()}")
+    print(f"STT_CUSTOM_COMMAND_SET={str(custom_set).lower()}")
+    if provider == "whisper_cli":
+        print(f"WHISPER_BINARY_FOUND={str(bool(shutil.which(whisper_binary))).lower()}")
+    if provider == "custom_cli":
+        cmd = (os.getenv("STT_CUSTOM_COMMAND") or "").strip()
+        first = shlex.split(cmd)[0] if cmd else ""
+        print(f"CUSTOM_BINARY_FOUND={str(bool(first and shutil.which(first))).lower()}")
+
+
+def cmd_transcribe_file(args):
+    input_path = Path(args.path).resolve()
+    if not input_path.exists() or not input_path.is_file():
+        raise ValueError(f"Audio file not found: {input_path.as_posix()}")
+    work_dir = speech_to_text.ensure_voice_work_dir()
+    wav_path = work_dir / f"manual_{input_path.stem}.wav"
+    cleanup_paths = [wav_path.as_posix()]
+    transcript = None
+    try:
+        speech_to_text.convert_voice_to_wav(input_path.as_posix(), wav_path.as_posix())
+        transcript = speech_to_text.transcribe_audio(wav_path.as_posix())
+        print(transcript)
+    finally:
+        if transcript is None or not speech_to_text.should_keep_voice_files():
+            speech_to_text.cleanup_voice_files(cleanup_paths)
+
+
+def _collect_doctor_report(repo_root: str = ".") -> dict:
+    root = Path(repo_root).resolve()
+    dirs_status = {item: (root / item).is_dir() for item in CRITICAL_REQUIRED_DIRECTORIES}
+    files_status = {item: (root / item).is_file() for item in CRITICAL_REQUIRED_FILES}
+
+    tasks_count = None
+    tasks_error = None
+    try:
+        tasks_count = validate_all_tasks()
+    except Exception as exc:  # pragma: no cover - surfaced in report
+        tasks_error = str(exc)
+
+    release_count = None
+    releases_error = None
+    try:
+        release_count = len(load_releases())
+    except Exception as exc:  # pragma: no cover
+        releases_error = str(exc)
+
+    decisions_count = None
+    decisions_error = None
+    try:
+        decisions_count = len(load_decision_index())
+    except Exception as exc:  # pragma: no cover
+        decisions_error = str(exc)
+
+    provider = (os.getenv("LLM_PROVIDER") or "fake").strip().lower()
+    claude_binary = (os.getenv("CLAUDE_CODE_BINARY") or "claude").strip() or "claude"
+    claude_configured = bool(claude_binary)
+
+    telegram_token_set = bool((os.getenv("TELEGRAM_BOT_TOKEN") or "").strip())
+    telegram_owner_set = bool((os.getenv("TELEGRAM_OWNER_ID") or "").strip())
+    telegram_dry = (os.getenv("TELEGRAM_DRY_RUN_BY_DEFAULT") or "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    openai_key_set = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    managed_project = validate_managed_repo_path()
+
+    storage_backend = None
+    storage_error = None
+    storage_counts = {}
+    sqlite_db_path = (os.getenv("SQLITE_DB_PATH") or "data/team_agents.db").strip() or "data/team_agents.db"
+    sqlite_exists = Path(sqlite_db_path).exists()
+    try:
+        storage_backend = storage.get_storage_backend()
+        storage.JSON_COLLECTION_PATHS["tasks"] = orchestrator.TASKS_PATH
+        storage.JSON_COLLECTION_PATHS["releases"] = release_manager.RELEASES_PATH
+        storage.JSON_COLLECTION_PATHS["decisions_index"] = decision_log.DECISION_INDEX_PATH
+        storage.JSON_COLLECTION_PATHS["sessions"] = Path("sessions") / "sessions.json"
+        storage.init_storage()
+        info = storage.storage_info()
+        storage_counts = {k: v.get("count", 0) for k, v in info.get("collections", {}).items()}
+    except Exception as exc:
+        storage_error = str(exc)
+
+    critical_ok = (
+        all(dirs_status.values())
+        and all(files_status.values())
+        and tasks_error is None
+        and releases_error is None
+        and decisions_error is None
+        and storage_error is None
+        and managed_project.get("valid", False)
+    )
+
+    warnings = []
+    if not telegram_token_set:
+        warnings.append("TELEGRAM_BOT_TOKEN не задан.")
+    if not telegram_owner_set:
+        warnings.append("TELEGRAM_OWNER_ID не задан.")
+    if provider == "claude_code" and not claude_configured:
+        warnings.append("Claude Code бинарь не настроен.")
+    if not openai_key_set:
+        warnings.append("OPENAI_API_KEY не задан (не критично).")
+    if storage_error is not None:
+        warnings.append(f"Storage backend error: {storage_error}")
+    warnings.extend(managed_project.get("warnings", []))
+
+    return {
+        "root": root.as_posix(),
+        "python_executable": sys.executable,
+        "python_version": sys.version.split()[0],
+        "cwd": Path.cwd().as_posix(),
+        "dirs_status": dirs_status,
+        "files_status": files_status,
+        "tasks_count": tasks_count,
+        "tasks_error": tasks_error,
+        "release_count": release_count,
+        "releases_error": releases_error,
+        "decisions_count": decisions_count,
+        "decisions_error": decisions_error,
+        "llm_provider": provider,
+        "claude_binary": claude_binary,
+        "claude_configured": claude_configured,
+        "storage_backend": storage_backend,
+        "sqlite_db_path": sqlite_db_path,
+        "sqlite_exists": sqlite_exists,
+        "storage_counts": storage_counts,
+        "storage_error": storage_error,
+        "json_files_present": {
+            "tasks": files_status.get("tasks/tasks.json", False),
+            "releases": files_status.get("releases/releases.json", False),
+            "decisions_index": files_status.get("decisions/index.json", False),
+            "sessions": (root / "sessions" / "sessions.json").is_file(),
+        },
+        "telegram_token_set": telegram_token_set,
+        "telegram_owner_set": telegram_owner_set,
+        "telegram_dry_run_default": telegram_dry,
+        "managed_project": managed_project,
+        "warnings": warnings,
+        "critical_ok": critical_ok,
+    }
+
+
+def cmd_doctor(_args):
+    report = _collect_doctor_report(".")
+    print("=== Doctor: проверка готовности MVP ===")
+    print(f"Python executable: {report['python_executable']}")
+    print(f"Python version: {report['python_version']}")
+    print(f"Рабочая директория: {report['cwd']}")
+    print()
+
+    print("Проверка директорий:")
+    for name, ok in report["dirs_status"].items():
+        print(f"- {name}: {'OK' if ok else 'MISSING'}")
+    print()
+
+    print("Проверка файлов:")
+    for name, ok in report["files_status"].items():
+        print(f"- {name}: {'OK' if ok else 'MISSING'}")
+    print()
+
+    print("Проверка задач:")
+    if report["tasks_error"] is None:
+        print(f"- validate_all_tasks: OK, задач={report['tasks_count']}")
+    else:
+        print(f"- validate_all_tasks: ERROR: {report['tasks_error']}")
+    print("Проверка релизов:")
+    if report["releases_error"] is None:
+        print(f"- load_releases: OK, релизов={report['release_count']}")
+    else:
+        print(f"- load_releases: ERROR: {report['releases_error']}")
+    print("Проверка решений:")
+    if report["decisions_error"] is None:
+        print(f"- load_decision_index: OK, решений={report['decisions_count']}")
+    else:
+        print(f"- load_decision_index: ERROR: {report['decisions_error']}")
+    print()
+
+    print("LLM конфигурация:")
+    print(f"- LLM_PROVIDER: {report['llm_provider']}")
+    print(f"- CLAUDE_CODE_BINARY: {report['claude_binary']}")
+    print(f"- Claude configured: {'true' if report['claude_configured'] else 'false'}")
+    print()
+    print("Управляемый проект:")
+    managed = report["managed_project"]
+    print(f"- system_root: {managed['system_root']}")
+    print(f"- MANAGED_REPO_PATH: {managed['managed_repo_path']}")
+    print(f"- resolved_root: {managed['managed_repo_root']}")
+    print(f"- exists: {'true' if managed['exists'] else 'false'}")
+    print(f"- is_directory: {'true' if managed['is_directory'] else 'false'}")
+    print(f"- has_git: {'true' if managed['has_git'] else 'false'}")
+    print(f"- has_readme: {'true' if managed['has_readme'] else 'false'}")
+    if managed["errors"]:
+        print("- errors:")
+        for item in managed["errors"]:
+            print(f"  - {item}")
+    if managed["warnings"]:
+        print("- warnings:")
+        for item in managed["warnings"]:
+            print(f"  - {item}")
+    print()
+    print("Storage:")
+    print(f"- STORAGE_BACKEND: {report.get('storage_backend')}")
+    print(f"- SQLITE_DB_PATH: {report.get('sqlite_db_path')}")
+    print(f"- SQLITE_DB_EXISTS: {'true' if report.get('sqlite_exists') else 'false'}")
+    print(
+        "- JSON_FILES_PRESENT: "
+        f"tasks={'true' if report['json_files_present'].get('tasks') else 'false'}, "
+        f"releases={'true' if report['json_files_present'].get('releases') else 'false'}, "
+        f"decisions_index={'true' if report['json_files_present'].get('decisions_index') else 'false'}, "
+        f"sessions={'true' if report['json_files_present'].get('sessions') else 'false'}"
+    )
+    if report.get("storage_error") is None:
+        print(
+            f"- collections: tasks={report['storage_counts'].get('tasks', 0)}, "
+            f"releases={report['storage_counts'].get('releases', 0)}, "
+            f"decisions_index={report['storage_counts'].get('decisions_index', 0)}, "
+            f"sessions={report['storage_counts'].get('sessions', 0)}"
+        )
+    else:
+        print(f"- ERROR: {report.get('storage_error')}")
+    print()
+
+    print("Telegram конфигурация:")
+    print(f"- TELEGRAM_BOT_TOKEN_SET: {'true' if report['telegram_token_set'] else 'false'}")
+    print(f"- TELEGRAM_OWNER_ID_SET: {'true' if report['telegram_owner_set'] else 'false'}")
+    print(f"- TELEGRAM_DRY_RUN_BY_DEFAULT: {'true' if report['telegram_dry_run_default'] else 'false'}")
+    print()
+
+    if report["warnings"]:
+        print("Предупреждения:")
+        for item in report["warnings"]:
+            print(f"- {item}")
+        print()
+
+    print("Подсказка для тестов:")
+    print("python3 -m unittest discover -s tests")
+    print()
+
+    if report["critical_ok"]:
+        print("✅ Система готова к локальному использованию")
+        return
+    print("❌ Найдены проблемы")
+    raise ValueError("Doctor обнаружил критические проблемы.")
+
+
+def cmd_demo_reset(args):
+    if not args.yes:
+        raise ValueError("Команда demo-reset разрушительная. Повторите с --yes.")
+    orchestrator.save_tasks([])
+    save_releases([])
+    from decision_log import save_decision_index
+
+    save_decision_index([])
+    artifacts_dir = Path("artifacts")
+    if artifacts_dir.exists():
+        for item in artifacts_dir.iterdir():
+            if item.name.startswith("DEMO-"):
+                if item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+                else:
+                    item.unlink(missing_ok=True)
+    print("Demo-данные сброшены.")
+
+
+def cmd_demo_seed(_args):
+    cmd_demo_reset(argparse.Namespace(yes=True))
+    task = create_task("Добавить healthcheck-команду", "Добавить CLI-команду для проверки состояния системы.")
+    tasks = orchestrator.load_tasks()
+    task_ref = next(item for item in tasks if item["id"] == task["id"])
+    task_ref["priority"] = "high"
+    task_ref["tags"] = ["demo", "mvp", "backend"]
+    task_ref["status"] = "ready_for_dev"
+
+    bug = {
+        "id": "BUG-1",
+        "type": "bug",
+        "title": "Ошибка при запуске validate",
+        "description": "Команда validate падает на некорректных входных данных.",
+        "status": "idea",
+        "priority": "medium",
+        "severity": "medium",
+        "depends_on": [],
+        "blocked_by": [],
+        "blocked_reason": "",
+        "tags": ["demo", "bug"],
+        "estimate": None,
+        "related_decisions": [],
+        "release_id": None,
+        "artifacts": {
+            "analysis": None,
+            "acceptance_criteria": [],
+            "architecture": None,
+            "technical_risks": [],
+            "implementation_guidance": None,
+            "implementation": None,
+            "implementation_plan": {
+                "summary": "",
+                "files_to_create": [],
+                "files_to_modify": [],
+                "proposed_changes": [],
+                "commands_to_run": [],
+                "tests_to_add": [],
+                "risks": [],
+                "rollback_notes": "",
+            },
+            "patch_proposal": {
+                "summary": "",
+                "files": [],
+                "unified_diff": "",
+                "requires_approval": True,
+                "approved": False,
+                "applied": False,
+                "applied_at": None,
+            },
+            "changed_files": [],
+            "developer_notes": None,
+            "test_cases": [],
+            "edge_cases": [],
+            "bugs": [],
+            "qa_verification": {
+                "verdict": "unknown",
+                "summary": "",
+                "checked_items": [],
+                "failed_checks": [],
+                "bugs_found": [],
+                "recommended_next_status": "review",
+            },
+            "command_results": [],
+            "repository_context": {
+                "attached": False,
+                "scanned_at": None,
+                "repo_root": ".",
+                "summary": {"total_files_indexed": 0, "interesting_directories": [], "ignored_paths": []},
+                "relevant_files": [],
+                "search_hits": [],
+            },
+            "bug_report": {
+                "summary": "validate падает на части задач.",
+                "environment": "local",
+                "steps_to_reproduce": ["Запустить python3 run.py validate", "Наблюдать ошибку"],
+                "actual_result": "Падает с ошибкой валидации.",
+                "expected_result": "Показывает детализированную ошибку без падения процесса.",
+                "logs": [],
+                "attachments": [],
+                "suspected_area": "orchestrator validation",
+                "impact": "demo blocker",
+            },
+        },
+        "history": [],
+    }
+    tasks.append(bug)
+    orchestrator.save_tasks(tasks)
+
+    metadata = create_decision(
+        title="Использовать JSON-хранилище на MVP",
+        context="Нужна простая локальная схема хранения без БД.",
+        decision="Хранить данные в JSON-файлах до следующего этапа.",
+        consequences="Просто запускать локально, но ограниченная масштабируемость.",
+        status="accepted",
+        tags=["mvp", "storage"],
+        related_tasks=[task["id"]],
+    )
+
+    tasks = orchestrator.load_tasks()
+    link_decision_to_task(tasks, task["id"], metadata["id"])
+    orchestrator.save_tasks(tasks)
+
+    release = create_release("v0.1.0-demo", "Demo release package")
+    tasks = orchestrator.load_tasks()
+    releases = load_releases()
+    add_task_to_release(tasks, releases, task["id"], release["id"])
+    add_task_to_release(tasks, releases, "BUG-1", release["id"])
+    orchestrator.save_tasks(tasks)
+    save_releases(releases)
+    validate_all_tasks()
+    print(f"Demo-данные созданы: {task['id']}, BUG-1, {metadata['id']}, {release['id']}")
+
+
+def cmd_demo(_args):
+    lines = [
+        "Рекомендуемый demo flow:",
+        "1. python3 run.py backlog",
+        "2. python3 run.py next-task",
+        "3. python3 run.py attach-repo-context --id TASK-1",
+        "4. python3 run.py run-next --id TASK-1",
+        "5. python3 run.py dev-plan --id TASK-1",
+        "6. python3 run.py run-command --id TASK-1 --command \"python3 run.py validate\"",
+        "7. python3 run.py run-next --id TASK-1",
+        "8. python3 run.py qa-report --id TASK-1",
+        "9. python3 run.py release-readiness --id REL-001",
+        "10. python3 run.py release-notes --id REL-001",
+    ]
+    print("\n".join(lines))
+
+
+def _find_or_create_demo_task() -> str:
+    tasks = orchestrator.load_tasks()
+    existing = next((item for item in tasks if item.get("title") == "DEMO: Добавить healthcheck-команду"), None)
+    if existing is not None:
+        return existing["id"]
+    task = create_task("DEMO: Добавить healthcheck-команду", "E2E demo task for local MVP validation.")
+    return task["id"]
+
+
+def cmd_e2e_demo(_args):
+    fake_client = get_llm_client("fake")
+    task_id = _find_or_create_demo_task()
+
+    tasks, task = _load_task_for_update(task_id)
+    context = build_repository_context_for_task(task)
+    task["artifacts"]["repository_context"] = context
+    add_history_event(task, "Attached repository context in e2e-demo.", agent="orchestrator")
+    orchestrator.save_tasks(tasks)
+
+    statuses = []
+    for _ in range(3):
+        current = get_task(task_id)
+        if current is None:
+            break
+        if current["status"] in {"in_progress", "review", "done"}:
+            break
+        updated, message = run_next_for_task(task_id, llm_client=fake_client)
+        statuses.append(f"{updated['status']}: {message}")
+
+    result_validate = run_safe_command("python3 run.py validate", cwd=None, timeout_seconds=30)
+    result_tests = run_safe_command("python3 -m unittest discover -s tests", cwd=None, timeout_seconds=120)
+    tasks, task = _load_task_for_update(task_id)
+    result_validate["source"] = "e2e_demo"
+    result_tests["source"] = "e2e_demo"
+    task["artifacts"]["command_results"].append(result_validate)
+    task["artifacts"]["command_results"].append(result_tests)
+    add_history_event(task, "Recorded e2e-demo command results.", agent="orchestrator")
+    orchestrator.save_tasks(tasks)
+
+    current = get_task(task_id)
+    if current and current["status"] == "in_progress":
+        updated, message = run_next_for_task(task_id, llm_client=fake_client)
+        statuses.append(f"{updated['status']}: {message}")
+
+    releases = load_releases()
+    rel = next((item for item in releases if item.get("name") == "v0.1.0-e2e-demo"), None)
+    if rel is None:
+        rel = create_release("v0.1.0-e2e-demo", "Auto-generated e2e demo release")
+        releases = load_releases()
+    tasks = orchestrator.load_tasks()
+    add_task_to_release(tasks, releases, task_id, rel["id"])
+    orchestrator.save_tasks(tasks)
+    save_releases(releases)
+
+    ready = calculate_release_readiness(tasks, rel)
+    notes = generate_release_notes(tasks, rel)
+    plan = get_task_implementation_plan(task_id) or {}
+    qa = get_task(task_id)["artifacts"].get("qa_verification", {}) if get_task(task_id) else {}
+    cmd_results = get_task(task_id)["artifacts"].get("command_results", []) if get_task(task_id) else []
+
+    print("=== E2E Demo (fake provider) ===")
+    print(f"Task: {task_id}")
+    if statuses:
+        print("Workflow transitions:")
+        for line in statuses:
+            print(f"- {line}")
+    print(f"Developer plan summary: {plan.get('summary', '') or '(empty)'}")
+    print(f"Command results recorded: {len(cmd_results)}")
+    print(f"QA verdict: {qa.get('verdict', 'unknown')}")
+    print(f"Release: {rel['id']} | ready={ready['ready']}")
+    print("Release notes preview:")
+    print("\n".join(notes.splitlines()[:12]))
+
+
+def cmd_storage_info(_args):
+    storage.JSON_COLLECTION_PATHS["tasks"] = orchestrator.TASKS_PATH
+    storage.JSON_COLLECTION_PATHS["releases"] = release_manager.RELEASES_PATH
+    storage.JSON_COLLECTION_PATHS["decisions_index"] = decision_log.DECISION_INDEX_PATH
+    storage.JSON_COLLECTION_PATHS["sessions"] = Path("sessions") / "sessions.json"
+    info = storage.storage_info()
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+
+
+def cmd_storage_init(_args):
+    storage.JSON_COLLECTION_PATHS["tasks"] = orchestrator.TASKS_PATH
+    storage.JSON_COLLECTION_PATHS["releases"] = release_manager.RELEASES_PATH
+    storage.JSON_COLLECTION_PATHS["decisions_index"] = decision_log.DECISION_INDEX_PATH
+    storage.JSON_COLLECTION_PATHS["sessions"] = Path("sessions") / "sessions.json"
+    storage.init_storage()
+    print("Storage initialized.")
+
+
+def cmd_migrate_json_to_sqlite(args):
+    storage.JSON_COLLECTION_PATHS["tasks"] = orchestrator.TASKS_PATH
+    storage.JSON_COLLECTION_PATHS["releases"] = release_manager.RELEASES_PATH
+    storage.JSON_COLLECTION_PATHS["decisions_index"] = decision_log.DECISION_INDEX_PATH
+    storage.JSON_COLLECTION_PATHS["sessions"] = Path("sessions") / "sessions.json"
+    result = storage.migrate_json_to_sqlite(overwrite=args.force)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def cmd_export_sqlite_to_json(args):
+    storage.JSON_COLLECTION_PATHS["tasks"] = orchestrator.TASKS_PATH
+    storage.JSON_COLLECTION_PATHS["releases"] = release_manager.RELEASES_PATH
+    storage.JSON_COLLECTION_PATHS["decisions_index"] = decision_log.DECISION_INDEX_PATH
+    storage.JSON_COLLECTION_PATHS["sessions"] = Path("sessions") / "sessions.json"
+    result = storage.export_sqlite_to_json(overwrite=args.force)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_context(args):
@@ -526,24 +1213,103 @@ def cmd_context(args):
         print(f"{filename} | {preview}")
 
 
+def format_project_status(result: dict) -> str:
+    lines = [
+        "Статус проекта:",
+        result.get("message", ""),
+        f"- total: {result.get('total_tasks', 0)}",
+        f"- ready: {result.get('ready_tasks_count', 0)}",
+        f"- blocked: {result.get('blocked_tasks_count', 0)}",
+        f"- releases: {result.get('releases_count', 0)} (ready: {result.get('ready_releases_count', 0)})",
+    ]
+    next_task = (result.get("next_recommendation") or {}).get("next_task")
+    if isinstance(next_task, dict):
+        lines.append(f"- next: {next_task.get('id')} | {next_task.get('title')}")
+    return "\n".join(lines)
+
+
+def format_task_status(result: dict) -> str:
+    art = result.get("artifact_summary", {})
+    lines = [
+        f"{result.get('id')} | {result.get('type')} | {result.get('status')} | {result.get('priority')}",
+        result.get("title", ""),
+        f"blocked={result.get('blocked')} reason={result.get('blocked_reason')}",
+        f"depends_on={result.get('depends_on', [])}",
+        f"release_id={result.get('release_id')}",
+        f"related_decisions={result.get('related_decisions', [])}",
+        (
+            "artifacts: "
+            f"analysis={art.get('has_analysis')} "
+            f"architecture={art.get('has_architecture')} "
+            f"plan={art.get('has_implementation_plan')} "
+            f"patch={art.get('has_patch_proposal')} "
+            f"commands={art.get('has_command_results')} "
+            f"qa={art.get('qa_verdict')} "
+            f"repo_ctx={art.get('repository_context_attached')}"
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def cmd_project_status(_args):
+    print(format_project_status(get_project_status()))
+
+
+def cmd_task_status(args):
+    print(format_task_status(get_task_status(args.id)))
+
+
+def cmd_prepare_task(args):
+    print(json.dumps(prepare_task_for_development(args.id), ensure_ascii=False, indent=2))
+
+
+def cmd_advance_task(args):
+    print(json.dumps(advance_task_safely(args.id, target_status=args.target), ensure_ascii=False, indent=2))
+
+
+def cmd_next_work(_args):
+    print(json.dumps(get_next_work_recommendation(), ensure_ascii=False, indent=2))
+
+
+def cmd_blockers(_args):
+    print(json.dumps(get_blockers_summary(), ensure_ascii=False, indent=2))
+
+
+def cmd_add_note(args):
+    note = add_task_note(args.id, args.text, author=args.author)
+    print(json.dumps(note, ensure_ascii=False, indent=2))
+
+
+def cmd_notes(args):
+    print(json.dumps(list_task_notes(args.id), ensure_ascii=False, indent=2))
+
+
+def cmd_task_discussion(args):
+    print(json.dumps(summarize_task_discussion(args.id), ensure_ascii=False, indent=2))
+
+
+def cmd_release_summary(args):
+    print(json.dumps(get_release_summary(args.id), ensure_ascii=False, indent=2))
+
+
 def cmd_repo_scan(_args):
-    summary = scan_repository(repo_root=".")
+    summary = scan_repository()
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def cmd_repo_tree(args):
-    entries = list_repository_tree(repo_root=".", max_depth=args.depth)
+    entries = list_repository_tree(max_depth=args.depth)
     for item in entries:
         print(item)
 
 
 def cmd_repo_file(args):
-    preview = read_repository_file(path=args.path, repo_root=".", max_chars=args.max_chars)
+    preview = read_repository_file(path=args.path, max_chars=args.max_chars)
     print(json.dumps(preview, ensure_ascii=False, indent=2))
 
 
 def cmd_repo_search(args):
-    hits = search_repository(query=args.query, repo_root=".", max_results=args.limit)
+    hits = search_repository(query=args.query, max_results=args.limit)
     if not hits:
         print("No matches found.")
         return
@@ -553,7 +1319,7 @@ def cmd_repo_search(args):
 
 def cmd_attach_repo_context(args):
     tasks, task = _load_task_for_update(args.id)
-    context = build_repository_context_for_task(task, repo_root=".")
+    context = build_repository_context_for_task(task)
     task["artifacts"]["repository_context"] = context
     add_history_event(task, "Attached repository context to task.", agent="orchestrator")
     orchestrator.save_tasks(tasks)
@@ -741,16 +1507,83 @@ def cmd_supervisor_actions(_args):
 
 
 def cmd_supervise(args):
-    plan = plan_supervisor_action(args.text)
+    session_id = getattr(args, "session_id", None) or "cli:default"
+    plan = plan_supervisor_action(args.text, session_id=session_id, user_id="cli-user", channel="cli")
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     if not args.execute:
         return
     if plan["action"]["name"] in RISKY_ACTIONS and not args.yes:
-        raise ValueError(
-            f"Refusing risky supervisor action '{plan['action']['name']}' without --yes confirmation."
-        )
-    result = execute_supervisor_action(plan, allow_risky=args.yes)
+        refusal = {
+            "executed": False,
+            "action": plan["action"]["name"],
+            "refusal_reason": f"Refusing risky supervisor action '{plan['action']['name']}' without --yes confirmation.",
+        }
+        print(json.dumps(refusal, ensure_ascii=False, indent=2))
+        return
+    result = execute_supervisor_action(
+        plan,
+        confirmed=args.yes,
+        session_id=session_id,
+        user_id="cli-user",
+        channel="cli",
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def cmd_focus(_args):
+    print(json.dumps(get_focus("cli:default", user_id="cli-user", channel="cli"), ensure_ascii=False, indent=2))
+
+
+def cmd_focus_task(args):
+    print(json.dumps(set_active_task("cli:default", args.id, user_id="cli-user", channel="cli"), ensure_ascii=False, indent=2))
+
+
+def cmd_focus_release(args):
+    print(
+        json.dumps(
+            set_active_release("cli:default", args.id, user_id="cli-user", channel="cli"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_focus_decision(args):
+    print(
+        json.dumps(
+            set_active_decision("cli:default", args.id, user_id="cli-user", channel="cli"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_clear_focus(_args):
+    print(json.dumps(clear_focus("cli:default", user_id="cli-user", channel="cli"), ensure_ascii=False, indent=2))
+
+
+def cmd_sessions(_args):
+    rows = []
+    for item in load_sessions():
+        rows.append(
+            {
+                "session_id": item.get("session_id"),
+                "channel": item.get("channel"),
+                "user_id": item.get("user_id"),
+                "active_task_id": item.get("active_task_id"),
+                "active_release_id": item.get("active_release_id"),
+                "active_decision_id": item.get("active_decision_id"),
+                "last_updated_at": item.get("last_updated_at"),
+            }
+        )
+    print(json.dumps(rows, ensure_ascii=False, indent=2))
+
+
+def cmd_session(args):
+    session = get_or_create_session(args.id, channel="cli")
+    preview = dict(session)
+    preview["recent_messages"] = (session.get("recent_messages") or [])[-10:]
+    print(json.dumps(preview, ensure_ascii=False, indent=2))
 
 
 def build_parser():
@@ -769,7 +1602,7 @@ def build_parser():
     create_bug_parser.add_argument("--raw-file", required=False)
     create_bug_parser.add_argument("--priority", required=False, default="medium")
     create_bug_parser.add_argument("--severity", required=False, default="unknown")
-    create_bug_parser.add_argument("--provider", choices=["fake", "openai"], required=False)
+    create_bug_parser.add_argument("--provider", choices=["fake", "openai", "claude_code"], required=False)
     create_bug_parser.set_defaults(func=cmd_create_bug)
 
     list_parser = subparsers.add_parser("list", help="List tasks")
@@ -898,7 +1731,33 @@ def build_parser():
     supervise_parser.add_argument("--text", required=True)
     supervise_parser.add_argument("--execute", action="store_true")
     supervise_parser.add_argument("--yes", action="store_true")
+    supervise_parser.add_argument("--session-id", required=False, default="cli:default")
     supervise_parser.set_defaults(func=cmd_supervise)
+
+    focus_parser = subparsers.add_parser("focus", help="Показать текущий активный фокус CLI-сессии")
+    focus_parser.set_defaults(func=cmd_focus)
+
+    focus_task_parser = subparsers.add_parser("focus-task", help="Установить фокус на задаче")
+    focus_task_parser.add_argument("--id", required=True)
+    focus_task_parser.set_defaults(func=cmd_focus_task)
+
+    focus_release_parser = subparsers.add_parser("focus-release", help="Установить фокус на релизе")
+    focus_release_parser.add_argument("--id", required=True)
+    focus_release_parser.set_defaults(func=cmd_focus_release)
+
+    focus_decision_parser = subparsers.add_parser("focus-decision", help="Установить фокус на решении")
+    focus_decision_parser.add_argument("--id", required=True)
+    focus_decision_parser.set_defaults(func=cmd_focus_decision)
+
+    clear_focus_parser = subparsers.add_parser("clear-focus", help="Очистить активный фокус CLI-сессии")
+    clear_focus_parser.set_defaults(func=cmd_clear_focus)
+
+    sessions_parser = subparsers.add_parser("sessions", help="Список сессий контекста")
+    sessions_parser.set_defaults(func=cmd_sessions)
+
+    session_parser = subparsers.add_parser("session", help="Детали одной сессии")
+    session_parser.add_argument("--id", required=True)
+    session_parser.set_defaults(func=cmd_session)
 
     dev_plan_parser = subparsers.add_parser("dev-plan", help="Show developer implementation plan for a task")
     dev_plan_parser.add_argument("--id", required=True)
@@ -959,21 +1818,114 @@ def build_parser():
 
     run_next_parser = subparsers.add_parser("run-next", help="Run next step for a task")
     run_next_parser.add_argument("--id", required=True)
-    run_next_parser.add_argument("--provider", choices=["fake", "openai"], required=False)
+    run_next_parser.add_argument("--provider", choices=["fake", "openai", "claude_code"], required=False)
     run_next_parser.set_defaults(func=cmd_run_next)
 
     run_all_parser = subparsers.add_parser("run-all", help="Run one step for all non-done tasks")
-    run_all_parser.add_argument("--provider", choices=["fake", "openai"], required=False)
+    run_all_parser.add_argument("--provider", choices=["fake", "openai", "claude_code"], required=False)
     run_all_parser.set_defaults(func=cmd_run_all)
 
     validate_parser = subparsers.add_parser("validate", help="Validate all tasks")
     validate_parser.set_defaults(func=cmd_validate)
+
+    project_status_parser = subparsers.add_parser("project-status", help="Показать сводный статус проекта")
+    project_status_parser.set_defaults(func=cmd_project_status)
+
+    task_status_parser = subparsers.add_parser("task-status", help="Показать детальный статус задачи")
+    task_status_parser.add_argument("--id", required=True)
+    task_status_parser.set_defaults(func=cmd_task_status)
+
+    prepare_task_parser = subparsers.add_parser("prepare-task", help="Подготовить задачу до ready_for_dev")
+    prepare_task_parser.add_argument("--id", required=True)
+    prepare_task_parser.set_defaults(func=cmd_prepare_task)
+
+    advance_task_parser = subparsers.add_parser("advance-task", help="Продвинуть задачу безопасно")
+    advance_task_parser.add_argument("--id", required=True)
+    advance_task_parser.add_argument("--target", required=False)
+    advance_task_parser.set_defaults(func=cmd_advance_task)
+
+    next_work_parser = subparsers.add_parser("next-work", help="Показать следующую рекомендуемую работу")
+    next_work_parser.set_defaults(func=cmd_next_work)
+
+    blockers_parser = subparsers.add_parser("blockers", help="Показать сводку блокеров")
+    blockers_parser.set_defaults(func=cmd_blockers)
+
+    add_note_parser = subparsers.add_parser("add-note", help="Добавить заметку к задаче")
+    add_note_parser.add_argument("--id", required=True)
+    add_note_parser.add_argument("--text", required=True)
+    add_note_parser.add_argument("--author", required=False, default="user")
+    add_note_parser.set_defaults(func=cmd_add_note)
+
+    notes_parser = subparsers.add_parser("notes", help="Показать заметки задачи")
+    notes_parser.add_argument("--id", required=True)
+    notes_parser.set_defaults(func=cmd_notes)
+
+    task_discussion_parser = subparsers.add_parser("task-discussion", help="Сводка обсуждения задачи")
+    task_discussion_parser.add_argument("--id", required=True)
+    task_discussion_parser.set_defaults(func=cmd_task_discussion)
+
+    release_summary_parser = subparsers.add_parser("release-summary", help="Краткий статус релиза")
+    release_summary_parser.add_argument("--id", required=True)
+    release_summary_parser.set_defaults(func=cmd_release_summary)
 
     agents_parser = subparsers.add_parser("agents", help="List available agent prompt files")
     agents_parser.set_defaults(func=cmd_agents)
 
     config_parser = subparsers.add_parser("config", help="Show effective LLM config")
     config_parser.set_defaults(func=cmd_config)
+
+    managed_parser = subparsers.add_parser("managed-project", help="Show managed project info")
+    managed_parser.set_defaults(func=cmd_managed_project)
+
+    managed_check_parser = subparsers.add_parser("managed-project-check", help="Validate managed project path")
+    managed_check_parser.set_defaults(func=cmd_managed_project_check)
+
+    llm_smoke_parser = subparsers.add_parser("llm-smoke", help="Run simple LLM provider smoke check")
+    llm_smoke_parser.add_argument("--prompt", required=True)
+    llm_smoke_parser.set_defaults(func=cmd_llm_smoke)
+
+    telegram_cfg_parser = subparsers.add_parser("telegram-config", help="Show Telegram bot config presence")
+    telegram_cfg_parser.set_defaults(func=cmd_telegram_config)
+
+    telegram_parser = subparsers.add_parser("telegram", help="Run Telegram bot in polling mode")
+    telegram_parser.set_defaults(func=cmd_telegram)
+
+    voice_cfg_parser = subparsers.add_parser("voice-config", help="Show voice/STT configuration")
+    voice_cfg_parser.set_defaults(func=cmd_voice_config)
+
+    transcribe_parser = subparsers.add_parser("transcribe-file", help="Convert and transcribe audio file")
+    transcribe_parser.add_argument("--path", required=True)
+    transcribe_parser.set_defaults(func=cmd_transcribe_file)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Проверка готовности MVP")
+    doctor_parser.set_defaults(func=cmd_doctor)
+
+    demo_reset_parser = subparsers.add_parser("demo-reset", help="Сброс demo-данных")
+    demo_reset_parser.add_argument("--yes", action="store_true")
+    demo_reset_parser.set_defaults(func=cmd_demo_reset)
+
+    demo_seed_parser = subparsers.add_parser("demo-seed", help="Создать demo-данные")
+    demo_seed_parser.set_defaults(func=cmd_demo_seed)
+
+    demo_parser = subparsers.add_parser("demo", help="Показать demo flow")
+    demo_parser.set_defaults(func=cmd_demo)
+
+    e2e_demo_parser = subparsers.add_parser("e2e-demo", help="Запустить e2e demo flow с fake provider")
+    e2e_demo_parser.set_defaults(func=cmd_e2e_demo)
+
+    storage_info_parser = subparsers.add_parser("storage-info", help="Показать storage backend и counts")
+    storage_info_parser.set_defaults(func=cmd_storage_info)
+
+    storage_init_parser = subparsers.add_parser("storage-init", help="Инициализировать storage backend")
+    storage_init_parser.set_defaults(func=cmd_storage_init)
+
+    migrate_storage_parser = subparsers.add_parser("migrate-json-to-sqlite", help="Миграция JSON -> SQLite")
+    migrate_storage_parser.add_argument("--force", action="store_true")
+    migrate_storage_parser.set_defaults(func=cmd_migrate_json_to_sqlite)
+
+    export_storage_parser = subparsers.add_parser("export-sqlite-to-json", help="Экспорт SQLite -> JSON")
+    export_storage_parser.add_argument("--force", action="store_true")
+    export_storage_parser.set_defaults(func=cmd_export_sqlite_to_json)
 
     context_parser = subparsers.add_parser("context", help="Show project context files")
     context_parser.add_argument("--show", action="store_true", help="Print full project context text")
