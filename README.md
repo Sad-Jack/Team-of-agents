@@ -1,53 +1,82 @@
-# Команда агентов
+# Multi-Agent Project Management MVP
 
-Проект для организации работы команды из отдельных AI-агентов по ролям.
+## Purpose
+This repository provides a deterministic multi-agent workflow for feature and bug work.
 
-## Цель
-Собрать единый процесс: аналитика -> архитектура -> разработка -> QA -> управление приоритетами и ростом.
+## Developer Action Layer
+When a task reaches the Developer transition (`ready_for_dev -> in_progress`), the Developer agent now produces a structured `implementation_plan` stored in task artifacts.
 
-## Роли
-### Базовые
-- Архитектор: принимает архитектурные решения, описывает структуру и технические компромиссы.
-- Разработчик: реализует задачи и фиксит баги.
-- Аналитик: оформляет задачи, уточняет требования и критерии готовности.
-- QA: проверяет реализованные задачи, проводит диагностику, заводит баги.
-- Менеджер: управляет приоритетами, сроками и общими организационными вопросами.
+The plan is a proposal only. No repository files are modified automatically.
 
-### Новые
-- Product Manager: определяет, что делать в MVP, приоритизирует и отрезает лишнее.
-- UX / User Flow Designer: проектирует и упрощает пользовательские сценарии.
-- DevOps / Infra Engineer (MVP): выбирает простой и стабильный способ деплоя и базовую инфраструктуру.
-- LLM / AI Engineer: проектирует LLM-ядро, промпты и оценку качества ответов.
-- Growth / Marketing Strategist: отвечает за привлечение пользователей и простую воронку роста.
+`implementation_plan` fields:
+- `summary`
+- `files_to_create`
+- `files_to_modify`
+- `proposed_changes`
+- `commands_to_run`
+- `tests_to_add`
+- `risks`
+- `rollback_notes`
 
-Промпты ролей находятся в `agents/prompts`.
+Each `proposed_changes` entry includes:
+- `file_path`
+- `change_type` (`create|modify|delete`)
+- `reason`
+- `description`
+- `safe_to_apply` (defaults to `false`)
 
-## Структура
-- `agents/prompts` — рабочие промпты по ролям.
-- `work-items/tasks` — файлы задач + `instruction.md` с шаблоном задачи.
-- `work-items/bugs` — файлы багов + `instruction.md` с шаблоном бага.
+## Project Context Layer
+Agents receive reusable project context from `project_context/*.md` before producing artifacts.
 
-## Правила ведения задач и багов
-- Именование файлов: `YYYY-MM-DD-short-title.md`.
-- Каждая задача и каждый баг создаются отдельным файлом в своей папке.
-- Шаблон задачи: `work-items/tasks/instruction.md`.
-- Шаблон бага: `work-items/bugs/instruction.md`.
-- Статусы в документах: `создан` или `выполнен`.
+## Architecture
+- `orchestrator.py`: validation, workflow transitions, persistence.
+- `agent_runner.py`: prompt + context + schema payload, JSON parsing.
+- `llm_client.py`: fake/default and optional OpenAI provider.
+- `tasks/tasks.json`: source of truth.
 
-## Рабочий процесс
-1. Аналитик создает задачу в `work-items/tasks` по шаблону.
-2. Product Manager определяет приоритет и необходимость в MVP.
-3. Архитектор (если нужно) уточняет технический подход.
-4. Разработчик реализует задачу.
-5. QA проверяет результат.
-6. Если найден дефект, QA заводит баг в `work-items/bugs` по шаблону.
-7. Разработчик исправляет баг, QA повторно валидирует.
-8. Менеджер синхронизирует приоритеты, загрузку и статус выполнения.
-9. Growth/Marketing и UX используют результат для улучшения воронки и сценариев.
+## Commands
+```bash
+python run.py create --title "..." --description "..."
+python run.py create-bug --title "..." --description "..." --raw "..."
+python run.py list
+python run.py show --id TASK-1
+python run.py run-next --id TASK-1
+python run.py run-all
+python run.py dev-plan --id TASK-1
+python run.py export-dev-plan --id TASK-1 --output dev_plan_TASK-1.md
+python run.py export-dev-plan --id TASK-1 --force
+python run.py validate
+python run.py agents
+python run.py config
+python run.py context
+python run.py context --show
+python -m unittest discover -s tests
+```
 
-## План разворачивания команды
-1. Перенести весь рабочий репозиторий в этот проект.
-2. Добавить `.gitignore` под стек проекта.
-3. Создать отдельный чат под каждую роль.
-4. В каждом чате закрепить соответствующий промпт из `agents/prompts`.
-5. Начать ведение задач и багов в `work-items`.
+## Notes
+- `dev-plan` prints stored `implementation_plan`.
+- If no plan exists, run developer step first.
+- `export-dev-plan` writes markdown plan output.
+- Default export path: `artifacts/<TASK-ID>/developer_plan.md`.
+- Use `--force` to overwrite.
+
+## LLM Providers
+- Default: `fake` (deterministic, used by tests)
+- Optional: `openai` via env vars
+  - `LLM_PROVIDER=openai`
+  - `OPENAI_API_KEY=...`
+  - `OPENAI_MODEL=gpt-5.1-mini`
+
+Do not commit `.env` or secrets.
+
+## Current Limitations
+- No Telegram integration yet.
+- No database yet.
+- No web server yet.
+- No automatic patch application from LLM output.
+- No real image parsing yet.
+
+## Next Steps
+- Reviewed patch application flow.
+- QA verification layer for proposed plan execution.
+- Telegram interface later.

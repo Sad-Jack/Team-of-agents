@@ -1,0 +1,268 @@
+[
+  {
+    "id": "TASK-1",
+    "title": "Create login API",
+    "description": "Raw user idea: add basic login endpoint for MVP auth flow.",
+    "status": "done",
+    "priority": "medium",
+    "artifacts": {
+      "analysis": "Structured requirements derived from idea: Raw user idea: add basic login endpoint for MVP auth flow.",
+      "acceptance_criteria": [
+        "Given the task scope, when implementation is completed, then expected outcome is observable.",
+        "Core flow works without runtime errors."
+      ],
+      "architecture": "Use simple modular Python components: task storage, orchestrator logic, CLI boundary.",
+      "technical_risks": [],
+      "implementation_guidance": null,
+      "implementation": "Implement incrementally with deterministic transitions and explicit status checks.\nDeveloper started execution based on ready_for_dev guidance.",
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [
+        "Happy path validation for expected output.",
+        "Invalid input handling does not break workflow."
+      ],
+      "edge_cases": [],
+      "bugs": [],
+      "implementation_plan": {
+        "summary": "",
+        "files_to_create": [],
+        "files_to_modify": [],
+        "proposed_changes": [],
+        "commands_to_run": [],
+        "tests_to_add": [],
+        "risks": [],
+        "rollback_notes": ""
+      }
+    },
+    "history": [
+      {
+        "previous_status": "idea",
+        "new_status": "refined",
+        "agent": "analyst",
+        "message": "Task refined with requirements and acceptance criteria.",
+        "timestamp": "2026-05-02T11:56:09+00:00"
+      },
+      {
+        "previous_status": "refined",
+        "new_status": "ready_for_dev",
+        "agent": "architect",
+        "message": "Architecture notes, risks, and implementation guidance added.",
+        "timestamp": "2026-05-02T11:56:09+00:00"
+      },
+      {
+        "previous_status": "ready_for_dev",
+        "new_status": "in_progress",
+        "agent": "developer",
+        "message": "Implementation started and development notes added.",
+        "timestamp": "2026-05-02T11:56:09+00:00"
+      },
+      {
+        "previous_status": "in_progress",
+        "new_status": "review",
+        "agent": "qa",
+        "message": "QA test cases and edge-case checks prepared for review.",
+        "timestamp": "2026-05-02T11:56:20+00:00"
+      },
+      {
+        "previous_status": "review",
+        "new_status": "done",
+        "agent": "system",
+        "message": "Review approved; task completed.",
+        "timestamp": "2026-05-02T11:56:20+00:00"
+      }
+    ],
+    "type": "feature"
+  },
+  {
+    "id": "BUG-1",
+    "type": "bug",
+    "title": "Login error",
+    "description": "Login fails with 500",
+    "status": "ready_for_dev",
+    "priority": "medium",
+    "severity": "unknown",
+    "raw_input": "When I enter valid credentials, API returns HTTP 500. Logs: NullPointerException in AuthService.",
+    "artifacts": {
+      "bug_report": {
+        "summary": "Structured bug summary from raw input.",
+        "environment": "unknown",
+        "steps_to_reproduce": [
+          "Open affected functionality",
+          "Perform the reported action",
+          "Observe the actual result"
+        ],
+        "actual_result": "Reported behavior occurs.",
+        "expected_result": "System should behave according to requirements.",
+        "logs": [],
+        "attachments": [],
+        "suspected_area": "unknown",
+        "impact": "Needs investigation."
+      },
+      "analysis": "Structured analysis for 'Login error': Login fails with 500",
+      "acceptance_criteria": [
+        "Core flow is clearly defined and testable.",
+        "Outcome is observable and verifiable."
+      ],
+      "architecture": "Use a simple modular structure with explicit workflow boundaries.",
+      "technical_risks": [
+        "Task fields may drift without schema checks.",
+        "Workflow integrity can break if transitions are bypassed."
+      ],
+      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
+      "implementation": null,
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [],
+      "edge_cases": [],
+      "bugs": [],
+      "implementation_plan": {
+        "summary": "",
+        "files_to_create": [],
+        "files_to_modify": [],
+        "proposed_changes": [],
+        "commands_to_run": [],
+        "tests_to_add": [],
+        "risks": [],
+        "rollback_notes": ""
+      }
+    },
+    "history": [
+      {
+        "timestamp": "2026-05-02T12:37:46Z",
+        "agent": "bug_intake",
+        "previous_status": null,
+        "new_status": "idea",
+        "message": "Bug Intake created a structured bug report.",
+        "prompt_source": "agents/bug_intake.md",
+        "llm_provider": "fake"
+      },
+      {
+        "timestamp": "2026-05-02T12:37:46Z",
+        "agent": "analyst",
+        "previous_status": "idea",
+        "new_status": "refined",
+        "message": "Analyst refined the raw idea into structured requirements.",
+        "prompt_source": "agents/analyst.md",
+        "llm_provider": "fake"
+      },
+      {
+        "timestamp": "2026-05-02T12:37:54Z",
+        "agent": "architect",
+        "previous_status": "refined",
+        "new_status": "ready_for_dev",
+        "message": "Architect prepared implementation guidance.",
+        "prompt_source": "agents/architect.md",
+        "llm_provider": "fake"
+      }
+    ]
+  },
+  {
+    "id": "TASK-2",
+    "type": "feature",
+    "title": "Add healthcheck command",
+    "description": "Add a simple CLI command that prints system health status.",
+    "status": "in_progress",
+    "priority": "medium",
+    "artifacts": {
+      "analysis": "Structured analysis for 'Add healthcheck command': Add a simple CLI command that prints system health status.",
+      "acceptance_criteria": [
+        "Core flow is clearly defined and testable.",
+        "Outcome is observable and verifiable."
+      ],
+      "architecture": "Use a simple modular structure with explicit workflow boundaries.",
+      "technical_risks": [
+        "Task fields may drift without schema checks.",
+        "Workflow integrity can break if transitions are bypassed."
+      ],
+      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
+      "implementation": "Developer prepared deterministic implementation notes.",
+      "implementation_plan": {
+        "summary": "Implementation plan generated by fake provider.",
+        "files_to_create": [],
+        "files_to_modify": [
+          "unknown"
+        ],
+        "proposed_changes": [
+          {
+            "file_path": "unknown",
+            "change_type": "modify",
+            "reason": "Task requires implementation changes.",
+            "description": "Review project structure and apply the required behavior.",
+            "safe_to_apply": false
+          }
+        ],
+        "commands_to_run": [
+          "python -m unittest discover -s tests"
+        ],
+        "tests_to_add": [
+          "Add or update unit tests for the changed behavior."
+        ],
+        "risks": [
+          "Exact files are unknown without deeper repository inspection."
+        ],
+        "rollback_notes": "Revert modified files if validation fails."
+      },
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [],
+      "edge_cases": [],
+      "bugs": []
+    },
+    "history": [
+      {
+        "timestamp": "2026-05-02T12:59:12Z",
+        "agent": "analyst",
+        "previous_status": "idea",
+        "new_status": "refined",
+        "message": "Analyst refined the raw idea into structured requirements.",
+        "prompt_source": "agents/analyst.md",
+        "llm_provider": "fake",
+        "context_files_used": [
+          "project.md",
+          "tech_stack.md",
+          "architecture.md",
+          "coding_rules.md",
+          "testing_rules.md",
+          "commands.md",
+          "restrictions.md"
+        ]
+      },
+      {
+        "timestamp": "2026-05-02T12:59:12Z",
+        "agent": "architect",
+        "previous_status": "refined",
+        "new_status": "ready_for_dev",
+        "message": "Architect prepared implementation guidance.",
+        "prompt_source": "agents/architect.md",
+        "llm_provider": "fake",
+        "context_files_used": [
+          "project.md",
+          "tech_stack.md",
+          "architecture.md",
+          "coding_rules.md",
+          "testing_rules.md",
+          "commands.md",
+          "restrictions.md"
+        ]
+      },
+      {
+        "timestamp": "2026-05-02T12:59:13Z",
+        "agent": "developer",
+        "previous_status": "ready_for_dev",
+        "new_status": "in_progress",
+        "message": "Developer prepared a structured implementation plan.",
+        "prompt_source": "agents/developer.md",
+        "llm_provider": "fake",
+        "context_files_used": [
+          "project.md",
+          "tech_stack.md",
+          "architecture.md",
+          "coding_rules.md",
+          "testing_rules.md",
+          "commands.md",
+          "restrictions.md"
+        ]
+      }
+    ]
+  }
+]
