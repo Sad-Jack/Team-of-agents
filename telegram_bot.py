@@ -25,6 +25,7 @@ from supervisor import (
     READ_ONLY_ACTIONS,
     RISKY_ACTIONS,
     SUPPORTED_ACTIONS,
+    SupervisorError,
     execute_supervisor_action,
     plan_supervisor_action,
 )
@@ -174,7 +175,16 @@ async def _run_dry(update: Any, user_text: str, session_id: str, user_id: str, c
     if not user_text:
         await _reply(update, "Пустой запрос. Пример: /dryrun Создай задачу на healthcheck")
         return
-    plan = plan_supervisor_action(user_text, session_id=session_id, user_id=user_id, channel=channel)
+    try:
+        plan = plan_supervisor_action(user_text, session_id=session_id, user_id=user_id, channel=channel)
+    except SupervisorError as exc:
+        import logging
+        logging.exception("SupervisorError in _run_dry: %s", exc)
+        await _reply(update, "Не смог разобрать ответ Supervisor. Попробуй переформулировать запрос или посмотри логи.")
+        return
+    if plan.get("intent") in {"clarify", "unknown"}:
+        await _reply(update, plan.get("explanation", "Уточни запрос."))
+        return
     await _reply(update, format_supervisor_plan(plan))
 
 
@@ -182,20 +192,35 @@ async def _run_execute(update: Any, user_text: str, confirmed: bool, session_id:
     if not user_text:
         await _reply(update, "Пустой запрос. Пример: /execute Создай задачу")
         return
-    plan = plan_supervisor_action(user_text, session_id=session_id, user_id=user_id, channel=channel)
+    try:
+        plan = plan_supervisor_action(user_text, session_id=session_id, user_id=user_id, channel=channel)
+    except SupervisorError as exc:
+        import logging
+        logging.exception("SupervisorError in _run_execute (planning): %s", exc)
+        await _reply(update, "Не смог разобрать ответ Supervisor. Попробуй переформулировать запрос или посмотри логи.")
+        return
+    if plan.get("intent") in {"clarify", "unknown"}:
+        await _reply(update, plan.get("explanation", "Уточни запрос."))
+        return
     if plan.get("action", {}).get("name") in RISKY_ACTIONS and not confirmed:
         await _reply(
             update,
             "Действие рискованное и требует подтверждения. Используйте /yes <запрос>.",
         )
         return
-    result = execute_supervisor_action(
-        plan,
-        confirmed=confirmed,
-        session_id=session_id,
-        user_id=user_id,
-        channel=channel,
-    )
+    try:
+        result = execute_supervisor_action(
+            plan,
+            confirmed=confirmed,
+            session_id=session_id,
+            user_id=user_id,
+            channel=channel,
+        )
+    except SupervisorError as exc:
+        import logging
+        logging.exception("SupervisorError in _run_execute (execution): %s", exc)
+        await _reply(update, "Не смог разобрать ответ Supervisor. Попробуй переформулировать запрос или посмотри логи.")
+        return
     await _reply(update, format_supervisor_execution_result(result))
 
 
@@ -251,18 +276,25 @@ async def help_handler(update: Any, context: Any) -> None:
         await _reply(update, "Access denied.")
         return
     text = (
-        "Команды:\n"
+        "Ты можешь писать обычным языком — не только slash-командами.\n"
+        "Supervisor разберёт смысл и предложит или выполнит нужное действие.\n\n"
+        "Slash-команды:\n"
         "/start\n/help\n/status\n/actions\n"
-        "/dryrun <текст>\n/execute <текст>\n/yes <текст>\n"
+        "/dryrun <текст>  — только план, без выполнения\n"
+        "/execute <текст> — план + выполнение\n"
+        "/yes <текст>     — подтверждение рискованного действия\n"
         "/focus\n/focus_task TASK-1\n/focus_release REL-001\n/focus_decision ADR-001\n/clear_focus\n\n"
-        "Примеры:\n"
-        "- Статус проекта\n"
+        "Примеры (обычный текст):\n"
+        "- Создай задачу: проверить Telegram Project Manager\n"
+        "- У нас баг: validate падает с FileNotFoundError\n"
         "- Что делать дальше?\n"
+        "- Статус проекта\n"
+        "- Покажи статус проекта\n"
         "- Подготовь TASK-1 к разработке\n"
         "- Добавь заметку к TASK-1: нужно проверить edge case\n"
         "- Что заблокировано?\n"
         "- Дай статус релиза REL-001\n"
-        "- Каким проектом ты управляешь?\n\n"
+        "- Каким проектом ты управляешь?\n"
         "- Обсудим TASK-1\n"
         "- Добавь заметку: проверить edge case\n"
         "- Что по ней сейчас?\n"
@@ -452,6 +484,17 @@ async def voice_handler(update: Any, context: Any) -> None:
             cleanup_voice_files(temp_files)
 
 
+async def error_handler(update: Any, context: Any) -> None:
+    import logging
+    logging.exception("Unhandled Telegram error", exc_info=getattr(context, "error", None))
+    message = getattr(update, "message", None) if update is not None else None
+    if message is not None:
+        try:
+            await message.reply_text("Произошла внутренняя ошибка. Я её залогировал.")
+        except Exception:
+            pass
+
+
 def build_application(config: dict) -> Any:
     try:
         from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
@@ -477,6 +520,7 @@ def build_application(config: dict) -> Any:
     app.add_handler(CommandHandler("clear_focus", clear_focus_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_error_handler(error_handler)
 
     return app
 

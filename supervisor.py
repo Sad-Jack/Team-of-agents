@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import backlog
@@ -227,6 +228,71 @@ class SupervisorError(Exception):
     pass
 
 
+def extract_json_object(raw: str) -> dict:
+    """Extract the first valid JSON object from raw LLM output.
+
+    Handles plain JSON, markdown-fenced JSON, and JSON embedded in surrounding text.
+    Raises SupervisorError with a safe preview if no valid JSON object is found.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise SupervisorError("Supervisor returned empty output.")
+
+    # Try direct parse first (fastest path)
+    try:
+        result = json.loads(raw.strip())
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Strip markdown fences (```json ... ``` or ``` ... ```) and retry
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if fence_match:
+        try:
+            result = json.loads(fence_match.group(1).strip())
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # Walk the string to find the first complete { ... } object, respecting
+    # string literals so embedded braces in values don't confuse the count.
+    start = raw.find("{")
+    if start >= 0:
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(raw)):
+            ch = raw[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start : i + 1]
+                    try:
+                        result = json.loads(candidate)
+                        if isinstance(result, dict):
+                            return result
+                    except json.JSONDecodeError:
+                        pass
+                    break
+
+    preview = raw[:1000]
+    raise SupervisorError(f"Supervisor returned invalid JSON. Raw preview: {preview!r}")
+
+
 def validate_supervisor_output(output: dict) -> None:
     if not isinstance(output, dict):
         raise SupervisorError("Supervisor output must be an object.")
@@ -309,10 +375,7 @@ def plan_supervisor_action(
     payload["agent_prompt"] = prompt
     client = llm_client or get_llm_client()
     raw = client.generate(payload)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SupervisorError(f"Supervisor returned invalid JSON: {exc}. Raw output: {raw}") from exc
+    parsed = extract_json_object(raw)
     validate_supervisor_output(parsed)
     parsed["user_text"] = user_text
     append_message(session_id, role="user", text=str(user_text), user_id=user_id, channel=channel)

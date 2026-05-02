@@ -6,11 +6,17 @@ from datetime import datetime, timezone
 
 ALLOWED_COMMANDS = {
     "python -m unittest discover -s tests",
+    "python3 -m unittest discover -s tests",
     "python run.py validate",
+    "python3 run.py validate",
     "python run.py agents",
+    "python3 run.py agents",
     "python run.py config",
+    "python3 run.py config",
     "python run.py context",
+    "python3 run.py context",
     "python run.py list",
+    "python3 run.py list",
 }
 
 FORBIDDEN_TOKENS = ["&&", "||", ";", "|", ">", "<", "`", "$("]

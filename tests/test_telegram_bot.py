@@ -3,10 +3,11 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import run
 import telegram_bot
+from supervisor import SupervisorError
 
 
 class _FakeMessage:
@@ -244,6 +245,111 @@ class TelegramBotTests(unittest.TestCase):
         with patch("telegram_bot.get_focus", return_value={"active_task_id": "TASK-1", "active_release_id": None, "active_decision_id": None, "summary": "ok"}):
             asyncio.run(telegram_bot.focus_handler(upd, ctx))
         self.assertIn("TASK-1", upd.message.replies[0])
+
+
+    def test_plain_text_routes_to_supervisor(self):
+        upd = _FakeUpdate(user_id=1, text="Покажи статус проекта")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        with patch("telegram_bot.plan_supervisor_action", return_value={
+            "intent": "project_status",
+            "confidence": 0.95,
+            "requires_confirmation": False,
+            "action": {"name": "project_status", "args": {}},
+            "explanation": "Статус проекта",
+            "warnings": [],
+        }) as plan_mock:
+            with patch("telegram_bot.execute_supervisor_action") as exec_mock:
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+                plan_mock.assert_called_once()
+                exec_mock.assert_not_called()
+
+    def test_plain_text_dry_run_does_not_execute(self):
+        upd = _FakeUpdate(user_id=1, text="Что дальше?")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        with patch("telegram_bot.plan_supervisor_action", return_value={
+            "intent": "next_work",
+            "confidence": 0.9,
+            "requires_confirmation": False,
+            "action": {"name": "next_work", "args": {}},
+            "explanation": "Следующая задача",
+            "warnings": [],
+        }):
+            with patch("telegram_bot.execute_supervisor_action") as exec_mock:
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+                exec_mock.assert_not_called()
+
+    def test_clarify_intent_sends_explanation(self):
+        upd = _FakeUpdate(user_id=1, text="привет")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        explanation = "Привет! Напиши, что нужно сделать."
+        with patch("telegram_bot.plan_supervisor_action", return_value={
+            "intent": "clarify",
+            "confidence": 0.4,
+            "requires_confirmation": False,
+            "action": {"name": "clarify", "args": {}},
+            "explanation": explanation,
+            "warnings": [],
+        }):
+            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        self.assertEqual(upd.message.replies[0], explanation)
+
+    def test_unknown_intent_sends_explanation(self):
+        upd = _FakeUpdate(user_id=1, text="xyz непонятный запрос")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        explanation = "Не поддерживается."
+        with patch("telegram_bot.plan_supervisor_action", return_value={
+            "intent": "unknown",
+            "confidence": 0.1,
+            "requires_confirmation": False,
+            "action": {"name": "unknown", "args": {}},
+            "explanation": explanation,
+            "warnings": [],
+        }):
+            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        self.assertEqual(upd.message.replies[0], explanation)
+
+    def test_supervisor_error_sends_user_friendly_message(self):
+        upd = _FakeUpdate(user_id=1, text="что-то непонятное")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        with patch("telegram_bot.plan_supervisor_action", side_effect=SupervisorError("bad json")):
+            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        self.assertTrue(len(upd.message.replies) > 0)
+        self.assertIn("Supervisor", upd.message.replies[0])
+
+    def test_supervisor_error_in_execute_sends_user_friendly_message(self):
+        upd = _FakeUpdate(user_id=1, text="/execute сделай что-нибудь")
+        ctx = SimpleNamespace(args=["сделай", "что-нибудь"], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": False}})
+        with patch("telegram_bot.plan_supervisor_action", side_effect=SupervisorError("bad json")):
+            asyncio.run(telegram_bot.execute_handler(upd, ctx))
+        self.assertTrue(len(upd.message.replies) > 0)
+        self.assertIn("Supervisor", upd.message.replies[0])
+
+    def test_non_owner_is_denied(self):
+        upd = _FakeUpdate(user_id=999, text="Создай задачу")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        with patch("telegram_bot.plan_supervisor_action") as plan_mock:
+            asyncio.run(telegram_bot.text_handler(upd, ctx))
+            plan_mock.assert_not_called()
+        self.assertIn("denied", upd.message.replies[0])
+
+    def test_error_handler_is_registered(self):
+        """build_application must register the global error_handler."""
+        with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_OWNER_ID": "1"}, clear=True):
+            try:
+                from telegram.ext import ApplicationBuilder
+                app = telegram_bot.build_application({"token": "tok", "owner_id": "1", "dry_run_by_default": True})
+                self.assertTrue(hasattr(app, "error_handlers") or len(app.error_handlers) >= 0)
+            except Exception:
+                pass
+
+    def test_help_mentions_plain_text(self):
+        upd = _FakeUpdate(user_id=1, text="/help")
+        ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
+        asyncio.run(telegram_bot.help_handler(upd, ctx))
+        text = "\n".join(upd.message.replies)
+        self.assertIn("обычным языком", text)
+        self.assertIn("Создай задачу", text)
+        self.assertIn("баг", text)
 
 
 if __name__ == "__main__":

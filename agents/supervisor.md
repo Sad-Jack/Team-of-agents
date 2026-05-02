@@ -82,3 +82,12 @@ Expected output schema:
   "explanation": "...",
   "warnings": []
 }
+
+Output rules (STRICT):
+- Return ONLY valid JSON. No text before or after the JSON object.
+- Do NOT wrap JSON in markdown fences (no ```json or ```).
+- Do NOT add explanatory prose outside the JSON.
+- All user-facing text MUST go inside the "explanation" field.
+- If the request is ambiguous or needs more detail, return intent="clarify".
+- If the request is not supported, return intent="unknown".
+- Never write anything outside the JSON object.

@@ -33,7 +33,48 @@
 - `agents/` — промпты ролей
 - `tasks/`, `releases/`, `decisions/`, `artifacts/` — данные и артефакты
 
-## Быстрый старт
+## Быстрый запуск
+
+### 1. Первичная настройка
+
+```bash
+./setup.sh
+```
+
+Создаёт `.venv`, устанавливает зависимости, копирует `.env.example` → `.env`.
+
+### 2. Заполнить `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=<токен от @BotFather>
+TELEGRAM_OWNER_ID=<твой Telegram user id>
+```
+
+### 3. Проверить
+
+```bash
+python3 run.py telegram-config
+python3 run.py doctor
+```
+
+`.env` подхватывается автоматически — вручную делать `source .env` не нужно.
+
+### 4. Запустить Telegram-бота
+
+```bash
+./start.sh
+```
+
+Или через make:
+
+```bash
+make setup
+make start
+```
+
+---
+
+## Быстрый старт (CLI без Telegram)
 
 ```bash
 python3 -m unittest discover -s tests
