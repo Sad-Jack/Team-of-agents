@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import backlog
 from agent_runner import AGENT_FILES, AGENTS_DIR, run_agent
 from llm_client import BaseLLMClient, get_llm_client
 
@@ -26,11 +27,15 @@ REQUIRED_ARTIFACT_FIELDS = [
     "implementation_guidance",
     "implementation",
     "implementation_plan",
+    "patch_proposal",
     "changed_files",
     "developer_notes",
     "test_cases",
     "edge_cases",
     "bugs",
+    "qa_verification",
+    "command_results",
+    "repository_context",
 ]
 
 REQUIRED_BUG_REPORT_FIELDS = [
@@ -46,13 +51,14 @@ REQUIRED_BUG_REPORT_FIELDS = [
 ]
 
 ALLOWED_CHANGE_TYPES = ["create", "modify", "delete"]
+ALLOWED_QA_VERDICTS = ["unknown", "passed", "failed", "needs_rework"]
+ALLOWED_QA_NEXT_STATUSES = ["done", "ready_for_dev", "in_progress", "review"]
 
 TRANSITIONS = {
     "idea": {"from": "idea", "to": "refined", "agent": "analyst"},
     "refined": {"from": "refined", "to": "ready_for_dev", "agent": "architect"},
     "ready_for_dev": {"from": "ready_for_dev", "to": "in_progress", "agent": "developer"},
     "in_progress": {"from": "in_progress", "to": "review", "agent": "qa"},
-    "review": {"from": "review", "to": "done", "agent": "orchestrator"},
 }
 
 
@@ -116,6 +122,214 @@ def _default_implementation_plan() -> dict:
         "risks": [],
         "rollback_notes": "",
     }
+
+
+def _default_patch_proposal() -> dict:
+    return {
+        "summary": "",
+        "files": [],
+        "unified_diff": "",
+        "requires_approval": True,
+        "approved": False,
+        "applied": False,
+        "applied_at": None,
+    }
+
+
+def _default_qa_verification() -> dict:
+    return {
+        "verdict": "unknown",
+        "summary": "",
+        "checked_items": [],
+        "failed_checks": [],
+        "bugs_found": [],
+        "recommended_next_status": "review",
+    }
+
+
+def _default_repository_context() -> dict:
+    return {
+        "attached": False,
+        "scanned_at": None,
+        "repo_root": ".",
+        "summary": {
+            "total_files_indexed": 0,
+            "interesting_directories": [],
+            "ignored_paths": [],
+        },
+        "relevant_files": [],
+        "search_hits": [],
+    }
+
+
+def _validate_repository_context(task_id: str, context: dict) -> None:
+    if not isinstance(context, dict):
+        raise ValueError(f"Task {task_id} artifacts.repository_context must be an object.")
+    for field in ("attached", "scanned_at", "repo_root", "summary", "relevant_files", "search_hits"):
+        if field not in context:
+            raise ValueError(f"Task {task_id} repository_context missing field: {field}")
+
+    if not isinstance(context["attached"], bool):
+        raise ValueError(f"Task {task_id} repository_context.attached must be a boolean.")
+    if context["scanned_at"] is not None and not isinstance(context["scanned_at"], str):
+        raise ValueError(f"Task {task_id} repository_context.scanned_at must be a string or null.")
+    if not isinstance(context["repo_root"], str):
+        raise ValueError(f"Task {task_id} repository_context.repo_root must be a string.")
+    if not isinstance(context["relevant_files"], list):
+        raise ValueError(f"Task {task_id} repository_context.relevant_files must be a list.")
+    if not isinstance(context["search_hits"], list):
+        raise ValueError(f"Task {task_id} repository_context.search_hits must be a list.")
+
+    summary = context["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(f"Task {task_id} repository_context.summary must be an object.")
+    for field in ("total_files_indexed", "interesting_directories", "ignored_paths"):
+        if field not in summary:
+            raise ValueError(f"Task {task_id} repository_context.summary missing field: {field}")
+    if not isinstance(summary["total_files_indexed"], int):
+        raise ValueError(f"Task {task_id} repository_context.summary.total_files_indexed must be an int.")
+    if not isinstance(summary["interesting_directories"], list):
+        raise ValueError(f"Task {task_id} repository_context.summary.interesting_directories must be a list.")
+    if not isinstance(summary["ignored_paths"], list):
+        raise ValueError(f"Task {task_id} repository_context.summary.ignored_paths must be a list.")
+
+    for idx, item in enumerate(context["relevant_files"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}] must be an object.")
+        for field in ("path", "reason", "size_bytes", "preview"):
+            if field not in item:
+                raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}] missing field: {field}")
+        if not isinstance(item["path"], str):
+            raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}].path must be a string.")
+        if not isinstance(item["reason"], str):
+            raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}].reason must be a string.")
+        if not isinstance(item["size_bytes"], int):
+            raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}].size_bytes must be an int.")
+        if not isinstance(item["preview"], str):
+            raise ValueError(f"Task {task_id} repository_context.relevant_files[{idx}].preview must be a string.")
+
+    for idx, hit in enumerate(context["search_hits"]):
+        if not isinstance(hit, dict):
+            raise ValueError(f"Task {task_id} repository_context.search_hits[{idx}] must be an object.")
+        for field in ("path", "line_number", "line"):
+            if field not in hit:
+                raise ValueError(f"Task {task_id} repository_context.search_hits[{idx}] missing field: {field}")
+        if not isinstance(hit["path"], str):
+            raise ValueError(f"Task {task_id} repository_context.search_hits[{idx}].path must be a string.")
+        if not isinstance(hit["line_number"], int):
+            raise ValueError(f"Task {task_id} repository_context.search_hits[{idx}].line_number must be an int.")
+        if not isinstance(hit["line"], str):
+            raise ValueError(f"Task {task_id} repository_context.search_hits[{idx}].line must be a string.")
+
+
+def _validate_qa_verification(task_id: str, report: dict) -> None:
+    if not isinstance(report, dict):
+        raise ValueError(f"Task {task_id} artifacts.qa_verification must be an object.")
+    required = [
+        "verdict",
+        "summary",
+        "checked_items",
+        "failed_checks",
+        "bugs_found",
+        "recommended_next_status",
+    ]
+    for field in required:
+        if field not in report:
+            raise ValueError(f"Task {task_id} qa_verification missing field: {field}")
+    if report["verdict"] not in ALLOWED_QA_VERDICTS:
+        raise ValueError(
+            f"Task {task_id} qa_verification.verdict must be one of: {', '.join(ALLOWED_QA_VERDICTS)}"
+        )
+    if not isinstance(report["summary"], str):
+        raise ValueError(f"Task {task_id} qa_verification.summary must be a string.")
+    for list_field in ("checked_items", "failed_checks", "bugs_found"):
+        if not isinstance(report[list_field], list):
+            raise ValueError(f"Task {task_id} qa_verification.{list_field} must be a list.")
+    if report["recommended_next_status"] not in ALLOWED_QA_NEXT_STATUSES:
+        raise ValueError(
+            f"Task {task_id} qa_verification.recommended_next_status must be one of: {', '.join(ALLOWED_QA_NEXT_STATUSES)}"
+        )
+
+
+def _validate_patch_proposal(task_id: str, proposal: dict) -> None:
+    if not isinstance(proposal, dict):
+        raise ValueError(f"Task {task_id} artifacts.patch_proposal must be an object.")
+    required = [
+        "summary",
+        "files",
+        "unified_diff",
+        "requires_approval",
+        "approved",
+        "applied",
+        "applied_at",
+    ]
+    for field in required:
+        if field not in proposal:
+            raise ValueError(f"Task {task_id} patch_proposal missing field: {field}")
+    if not isinstance(proposal["summary"], str):
+        raise ValueError(f"Task {task_id} patch_proposal.summary must be a string.")
+    if not isinstance(proposal["files"], list):
+        raise ValueError(f"Task {task_id} patch_proposal.files must be a list.")
+    if not isinstance(proposal["unified_diff"], str):
+        raise ValueError(f"Task {task_id} patch_proposal.unified_diff must be a string.")
+    for bool_field in ("requires_approval", "approved", "applied"):
+        if not isinstance(proposal[bool_field], bool):
+            raise ValueError(f"Task {task_id} patch_proposal.{bool_field} must be a boolean.")
+    if proposal["applied_at"] is not None and not isinstance(proposal["applied_at"], str):
+        raise ValueError(f"Task {task_id} patch_proposal.applied_at must be a string or null.")
+
+    for idx, item in enumerate(proposal["files"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"Task {task_id} patch_proposal.files[{idx}] must be an object.")
+        for key in ("file_path", "change_type", "reason", "content", "safe_to_apply"):
+            if key not in item:
+                raise ValueError(f"Task {task_id} patch_proposal.files[{idx}] missing field: {key}")
+        if not isinstance(item["file_path"], str):
+            raise ValueError(f"Task {task_id} patch_proposal.files[{idx}].file_path must be a string.")
+        if item["change_type"] not in ALLOWED_CHANGE_TYPES:
+            raise ValueError(
+                f"Task {task_id} patch_proposal.files[{idx}].change_type must be one of: {', '.join(ALLOWED_CHANGE_TYPES)}"
+            )
+        if not isinstance(item["reason"], str):
+            raise ValueError(f"Task {task_id} patch_proposal.files[{idx}].reason must be a string.")
+        if not isinstance(item["content"], str):
+            raise ValueError(f"Task {task_id} patch_proposal.files[{idx}].content must be a string.")
+        if not isinstance(item["safe_to_apply"], bool):
+            raise ValueError(f"Task {task_id} patch_proposal.files[{idx}].safe_to_apply must be a boolean.")
+
+
+def _validate_command_results(task_id: str, results: list) -> None:
+    if not isinstance(results, list):
+        raise ValueError(f"Task {task_id} artifacts.command_results must be a list.")
+    required = [
+        "command",
+        "exit_code",
+        "success",
+        "stdout",
+        "stderr",
+        "started_at",
+        "finished_at",
+        "duration_seconds",
+        "source",
+        "working_directory",
+    ]
+    for idx, item in enumerate(results):
+        if not isinstance(item, dict):
+            raise ValueError(f"Task {task_id} command_results[{idx}] must be an object.")
+        for field in required:
+            if field not in item:
+                raise ValueError(f"Task {task_id} command_results[{idx}] missing field: {field}")
+        if not isinstance(item["command"], str):
+            raise ValueError(f"Task {task_id} command_results[{idx}].command must be a string.")
+        if item["exit_code"] is not None and not isinstance(item["exit_code"], int):
+            raise ValueError(f"Task {task_id} command_results[{idx}].exit_code must be int or null.")
+        if not isinstance(item["success"], bool):
+            raise ValueError(f"Task {task_id} command_results[{idx}].success must be a boolean.")
+        for s in ("stdout", "stderr", "started_at", "finished_at", "source", "working_directory"):
+            if not isinstance(item[s], str):
+                raise ValueError(f"Task {task_id} command_results[{idx}].{s} must be a string.")
+        if not isinstance(item["duration_seconds"], (int, float)):
+            raise ValueError(f"Task {task_id} command_results[{idx}].duration_seconds must be a number.")
 
 
 def _validate_implementation_plan(task_id: str, plan: dict) -> None:
@@ -184,7 +398,18 @@ def validate_task(task: dict) -> None:
     if not isinstance(task, dict):
         raise ValueError("Task must be a JSON object.")
 
-    required_top_level = ["id", "type", "title", "description", "status", "priority", "artifacts", "history"]
+    required_top_level = [
+        "id",
+        "type",
+        "title",
+        "description",
+        "status",
+        "priority",
+        "artifacts",
+        "history",
+        "related_decisions",
+        "release_id",
+    ]
     for key in required_top_level:
         if key not in task:
             raise ValueError(f"Task is missing required field: {key}")
@@ -209,6 +434,29 @@ def validate_task(task: dict) -> None:
 
     if not isinstance(task["history"], list):
         raise ValueError(f"Task {task['id']} history must be a list.")
+    for list_field in ("depends_on", "blocked_by", "tags"):
+        if list_field not in task:
+            raise ValueError(f"Task {task['id']} is missing required field: {list_field}")
+        if not isinstance(task[list_field], list):
+            raise ValueError(f"Task {task['id']} {list_field} must be a list.")
+    if not isinstance(task.get("blocked_reason"), str):
+        raise ValueError(f"Task {task['id']} blocked_reason must be a string.")
+    estimate = task.get("estimate")
+    if estimate is not None and not isinstance(estimate, (int, float, str)):
+        raise ValueError(f"Task {task['id']} estimate must be null, int, float, or string.")
+    for dep in task["depends_on"]:
+        if not isinstance(dep, str):
+            raise ValueError(f"Task {task['id']} depends_on values must be strings.")
+        if dep == task["id"]:
+            raise ValueError(f"Task {task['id']} cannot depend on itself.")
+    if not isinstance(task["related_decisions"], list):
+        raise ValueError(f"Task {task['id']} related_decisions must be a list.")
+    for decision_id in task["related_decisions"]:
+        if not isinstance(decision_id, str):
+            raise ValueError(f"Task {task['id']} related_decisions values must be strings.")
+    release_id = task.get("release_id")
+    if release_id is not None and not isinstance(release_id, str):
+        raise ValueError(f"Task {task['id']} release_id must be null or string.")
 
     artifacts = task["artifacts"]
     if not isinstance(artifacts, dict):
@@ -229,6 +477,10 @@ def validate_task(task: dict) -> None:
         if not isinstance(artifacts[list_field], list):
             raise ValueError(f"Task {task['id']} artifacts.{list_field} must be a list.")
     _validate_implementation_plan(task["id"], artifacts["implementation_plan"])
+    _validate_patch_proposal(task["id"], artifacts["patch_proposal"])
+    _validate_qa_verification(task["id"], artifacts["qa_verification"])
+    _validate_command_results(task["id"], artifacts["command_results"])
+    _validate_repository_context(task["id"], artifacts["repository_context"])
 
     if task["type"] == "bug":
         if "severity" not in task or not isinstance(task["severity"], str):
@@ -259,6 +511,13 @@ def _normalize_bug_report(report: Optional[dict] = None) -> dict:
 
 def _normalize_task_schema(task: dict) -> dict:
     task.setdefault("type", "feature")
+    task.setdefault("depends_on", [])
+    task.setdefault("blocked_by", [])
+    task.setdefault("blocked_reason", "")
+    task.setdefault("tags", [])
+    task.setdefault("estimate", None)
+    task.setdefault("related_decisions", [])
+    task.setdefault("release_id", None)
     artifacts = task.setdefault("artifacts", {})
 
     defaults = {
@@ -269,11 +528,15 @@ def _normalize_task_schema(task: dict) -> dict:
         "implementation_guidance": None,
         "implementation": None,
         "implementation_plan": _default_implementation_plan(),
+        "patch_proposal": _default_patch_proposal(),
         "changed_files": [],
         "developer_notes": None,
         "test_cases": [],
         "edge_cases": [],
         "bugs": [],
+        "qa_verification": _default_qa_verification(),
+        "command_results": [],
+        "repository_context": _default_repository_context(),
     }
     for key, default_value in defaults.items():
         artifacts.setdefault(key, default_value)
@@ -286,6 +549,45 @@ def _normalize_task_schema(task: dict) -> dict:
             if key in current:
                 merged[key] = current[key]
         artifacts["implementation_plan"] = merged
+    if not isinstance(artifacts.get("qa_verification"), dict):
+        artifacts["qa_verification"] = _default_qa_verification()
+    else:
+        current_q = artifacts["qa_verification"]
+        merged_q = _default_qa_verification()
+        for key in merged_q:
+            if key in current_q:
+                merged_q[key] = current_q[key]
+        artifacts["qa_verification"] = merged_q
+    if not isinstance(artifacts.get("patch_proposal"), dict):
+        artifacts["patch_proposal"] = _default_patch_proposal()
+    else:
+        current_p = artifacts["patch_proposal"]
+        merged_p = _default_patch_proposal()
+        for key in merged_p:
+            if key in current_p:
+                merged_p[key] = current_p[key]
+        artifacts["patch_proposal"] = merged_p
+    if not isinstance(artifacts.get("command_results"), list):
+        artifacts["command_results"] = []
+    if not isinstance(artifacts.get("repository_context"), dict):
+        artifacts["repository_context"] = _default_repository_context()
+    else:
+        current_r = artifacts["repository_context"]
+        merged_r = _default_repository_context()
+        for key in merged_r:
+            if key in current_r:
+                merged_r[key] = current_r[key]
+        if not isinstance(merged_r.get("summary"), dict):
+            merged_r["summary"] = _default_repository_context()["summary"]
+        else:
+            summary_defaults = _default_repository_context()["summary"]
+            summary_current = merged_r["summary"]
+            merged_summary = dict(summary_defaults)
+            for key in summary_defaults:
+                if key in summary_current:
+                    merged_summary[key] = summary_current[key]
+            merged_r["summary"] = merged_summary
+        artifacts["repository_context"] = merged_r
 
     if task["type"] == "bug":
         task.setdefault("severity", "unknown")
@@ -375,6 +677,20 @@ def get_next_transition(status: str) -> Optional[dict]:
     return dict(transition)
 
 
+def _review_gate_transition(task: dict) -> Optional[dict]:
+    verdict = task["artifacts"]["qa_verification"]["verdict"]
+    if verdict == "passed":
+        return {"from": "review", "to": "done", "agent": "orchestrator", "message": "QA verification passed; task completed."}
+    if verdict in ("failed", "needs_rework"):
+        return {
+            "from": "review",
+            "to": "ready_for_dev",
+            "agent": "orchestrator",
+            "message": "QA verification requires rework; task returned to ready_for_dev.",
+        }
+    return None
+
+
 def _apply_agent_artifacts(task: dict, agent_result: dict) -> None:
     artifacts = agent_result.get("artifacts", {})
     if not isinstance(artifacts, dict):
@@ -388,12 +704,21 @@ def _apply_agent_artifacts(task: dict, agent_result: dict) -> None:
 def run_next_step(task: dict, llm_client: Optional[BaseLLMClient] = None) -> Tuple[dict, str]:
     _normalize_task_schema(task)
     validate_task(task)
+    tasks = load_tasks()
 
     current_status = task["status"]
     if current_status == "done":
         return task, "Task is already done."
+    if backlog.is_task_blocked(task, tasks):
+        reason = backlog.get_blocked_reason(task, tasks) or "Task has unresolved blockers."
+        return task, f"Task {task['id']} is blocked: {reason}"
 
-    transition = get_next_transition(current_status)
+    if current_status == "review":
+        transition = _review_gate_transition(task)
+        if transition is None:
+            return task, "QA verification is unknown; task remains in review."
+    else:
+        transition = get_next_transition(current_status)
     if transition is None:
         return task, "Task is already done."
 
@@ -402,7 +727,7 @@ def run_next_step(task: dict, llm_client: Optional[BaseLLMClient] = None) -> Tup
     agent = transition["agent"]
 
     if agent == "orchestrator":
-        message = "Review approved; task completed."
+        message = transition.get("message", "Review approved; task completed.")
         prompt_source = "orchestrator"
         llm_provider = "orchestrator"
         context_files_used = None
@@ -462,6 +787,11 @@ def create_task(title: str, description: str) -> dict:
             "description": description,
             "status": "idea",
             "priority": "medium",
+            "depends_on": [],
+            "blocked_by": [],
+            "blocked_reason": "",
+            "tags": [],
+            "estimate": None,
             "artifacts": {},
             "history": [],
         }
@@ -493,6 +823,11 @@ def create_bug(
             "status": "idea",
             "priority": priority,
             "severity": severity,
+            "depends_on": [],
+            "blocked_by": [],
+            "blocked_reason": "",
+            "tags": [],
+            "estimate": None,
             "raw_input": raw_input or "",
             "artifacts": {
                 "bug_report": _normalize_bug_report(),
@@ -540,6 +875,26 @@ def get_task_implementation_plan(task_id: str) -> Optional[dict]:
     if task is None:
         return None
     return task["artifacts"].get("implementation_plan")
+
+
+def get_task_patch_proposal(task_id: str) -> Optional[dict]:
+    task = get_task(task_id)
+    if task is None:
+        return None
+    return task["artifacts"].get("patch_proposal")
+
+
+def add_history_event(task: dict, message: str, agent: str = "orchestrator") -> None:
+    _append_history(
+        task,
+        task["status"],
+        task["status"],
+        agent,
+        message,
+        None,
+        None,
+        context_files_used=None,
+    )
 
 
 def run_next_for_task(task_id: str, llm_client: Optional[BaseLLMClient] = None) -> Tuple[Optional[dict], str]:

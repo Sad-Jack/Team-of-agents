@@ -1,7 +1,9 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from llm_client import LLMClientError, get_llm_client
+from decision_context_loader import load_decision_context_for_task
 from project_context_loader import load_project_context_text, list_project_context_files
 
 AGENTS_DIR = Path("agents")
@@ -61,6 +63,23 @@ def _required_schema_for_agent(agent_name: str) -> dict:
                     "risks": ["string"],
                     "rollback_notes": "string",
                 },
+                "patch_proposal": {
+                    "summary": "string",
+                    "files": [
+                        {
+                            "file_path": "string",
+                            "change_type": "create|modify|delete",
+                            "reason": "string",
+                            "content": "string",
+                            "safe_to_apply": "boolean",
+                        }
+                    ],
+                    "unified_diff": "string",
+                    "requires_approval": "boolean",
+                    "approved": "boolean",
+                    "applied": "boolean",
+                    "applied_at": "string|null",
+                },
             },
             "message": "string",
         },
@@ -69,6 +88,14 @@ def _required_schema_for_agent(agent_name: str) -> dict:
                 "test_cases": ["string"],
                 "edge_cases": ["string"],
                 "bugs": ["string or object"],
+                "qa_verification": {
+                    "verdict": "unknown|passed|failed|needs_rework",
+                    "summary": "string",
+                    "checked_items": ["string"],
+                    "failed_checks": ["string"],
+                    "bugs_found": ["string or object"],
+                    "recommended_next_status": "done|ready_for_dev|in_progress|review",
+                },
             },
             "message": "string",
         },
@@ -101,6 +128,7 @@ def run_agent(agent_name: str, task: dict, llm_client=None) -> dict:
     project_context_text = load_project_context_text()
     context_files = list_project_context_files()
     client = llm_client or get_llm_client()
+    decision_context = load_decision_context_for_task(task)
 
     common_instructions = "Return only valid JSON. Do not include markdown or explanations."
     if agent_name == "bug_intake":
@@ -109,11 +137,19 @@ def run_agent(agent_name: str, task: dict, llm_client=None) -> dict:
             "Do not invent exact facts. Use 'unknown' when information is missing."
         )
 
+    task_payload = deepcopy(task)
+    artifacts = task_payload.get("artifacts", {})
+    if isinstance(artifacts, dict):
+        repo_ctx = artifacts.get("repository_context")
+        if not (isinstance(repo_ctx, dict) and repo_ctx.get("attached") is True):
+            artifacts.pop("repository_context", None)
+
     payload = {
         "agent_name": agent_name,
         "agent_prompt": prompt,
         "project_context": project_context_text,
-        "task": task,
+        "decision_context": decision_context,
+        "task": task_payload,
         "required_output_schema": _required_schema_for_agent(agent_name),
         "instructions": common_instructions,
     }

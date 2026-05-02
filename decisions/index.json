@@ -1,0 +1,13 @@
+[
+  {
+    "id": "ADR-001",
+    "title": "Use JSON storage",
+    "status": "accepted",
+    "date": "2026-05-02",
+    "tags": [],
+    "related_tasks": [
+      "TASK-1"
+    ],
+    "file_path": "decisions/ADR-001.md"
+  }
+]

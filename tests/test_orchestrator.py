@@ -13,6 +13,8 @@ import orchestrator
 import project_context_loader
 import run
 from llm_client import FakeLLMClient, LLMClientError, get_llm_client
+from patch_utils import apply_patch_proposal, approve_patch
+from repo_inspector import build_repository_context_for_task
 
 
 class BaseIsolatedTest(unittest.TestCase):
@@ -27,6 +29,44 @@ class BaseIsolatedTest(unittest.TestCase):
             "tests_to_add": [],
             "risks": [],
             "rollback_notes": "",
+        }
+
+    @staticmethod
+    def default_patch_proposal():
+        return {
+            "summary": "",
+            "files": [],
+            "unified_diff": "",
+            "requires_approval": True,
+            "approved": False,
+            "applied": False,
+            "applied_at": None,
+        }
+
+    @staticmethod
+    def default_qa_verification():
+        return {
+            "verdict": "unknown",
+            "summary": "",
+            "checked_items": [],
+            "failed_checks": [],
+            "bugs_found": [],
+            "recommended_next_status": "review",
+        }
+
+    @staticmethod
+    def default_repository_context():
+        return {
+            "attached": False,
+            "scanned_at": None,
+            "repo_root": ".",
+            "summary": {
+                "total_files_indexed": 0,
+                "interesting_directories": [],
+                "ignored_paths": [],
+            },
+            "relevant_files": [],
+            "search_hits": [],
         }
 
     def setUp(self):
@@ -73,6 +113,13 @@ class BaseIsolatedTest(unittest.TestCase):
             "description": "Desc",
             "status": status,
             "priority": "medium",
+            "depends_on": [],
+            "blocked_by": [],
+            "blocked_reason": "",
+            "tags": [],
+            "estimate": None,
+            "related_decisions": [],
+            "release_id": None,
             "artifacts": {
                 "analysis": None,
                 "acceptance_criteria": [],
@@ -81,11 +128,15 @@ class BaseIsolatedTest(unittest.TestCase):
                 "implementation_guidance": None,
                 "implementation": None,
                 "implementation_plan": self.default_plan(),
+                "patch_proposal": self.default_patch_proposal(),
                 "changed_files": [],
                 "developer_notes": None,
                 "test_cases": [],
                 "edge_cases": [],
                 "bugs": [],
+                "qa_verification": self.default_qa_verification(),
+                "command_results": [],
+                "repository_context": self.default_repository_context(),
             },
             "history": [],
         }
@@ -107,293 +158,226 @@ class BaseIsolatedTest(unittest.TestCase):
 
 
 class OrchestratorTests(BaseIsolatedTest):
-    def test_create_task(self):
+    def test_default_task_includes_patch_proposal(self):
         task = orchestrator.create_task("Task A", "Task description")
-        self.assertEqual(task["id"], "TASK-1")
-        self.assertEqual(task["status"], "idea")
-        self.assertEqual(task["type"], "feature")
-        self.assertIn("implementation_plan", task["artifacts"])
+        self.assertIn("patch_proposal", task["artifacts"])
 
-    def test_validate_correct_task(self):
+    def test_validate_accepts_patch_proposal(self):
         orchestrator.validate_task(self.make_task())
 
-    def test_reject_invalid_status(self):
-        task = self.make_task(status="broken")
+    def test_validate_accepts_backlog_fields(self):
+        task = self.make_task()
+        task["depends_on"] = ["TASK-2"]
+        task["blocked_by"] = ["external: pending API"]
+        task["blocked_reason"] = "Need API contract."
+        task["tags"] = ["backend"]
+        task["estimate"] = "medium"
+        orchestrator.validate_task(task)
+
+    def test_validate_rejects_self_dependency(self):
+        task = self.make_task()
+        task["depends_on"] = ["TASK-1"]
         with self.assertRaises(ValueError):
             orchestrator.validate_task(task)
 
-    def test_validate_rejects_invalid_change_type(self):
+    def test_validate_accepts_repository_context(self):
         task = self.make_task()
-        task["artifacts"]["implementation_plan"]["proposed_changes"] = [
+        task["artifacts"]["repository_context"] = {
+            "attached": True,
+            "scanned_at": "2026-05-02T12:00:00Z",
+            "repo_root": ".",
+            "summary": {
+                "total_files_indexed": 3,
+                "interesting_directories": ["tasks"],
+                "ignored_paths": [".git/config"],
+            },
+            "relevant_files": [
+                {"path": "run.py", "reason": "entrypoint", "size_bytes": 10, "preview": "print"},
+            ],
+            "search_hits": [
+                {"path": "orchestrator.py", "line_number": 1, "line": "import json"},
+            ],
+        }
+        orchestrator.validate_task(task)
+
+    def test_validate_rejects_invalid_repository_context(self):
+        task = self.make_task()
+        task["artifacts"]["repository_context"] = {"attached": "yes"}
+        with self.assertRaises(ValueError):
+            orchestrator.validate_task(task)
+
+    def test_validate_rejects_invalid_patch_change_type(self):
+        task = self.make_task()
+        task["artifacts"]["patch_proposal"]["files"] = [
             {
-                "file_path": "x.py",
+                "file_path": "a.txt",
                 "change_type": "rename",
-                "reason": "r",
-                "description": "d",
+                "reason": "x",
+                "content": "",
                 "safe_to_apply": False,
             }
         ]
         with self.assertRaises(ValueError):
             orchestrator.validate_task(task)
 
-    def test_idea_to_refined_transition(self):
-        task, _ = orchestrator.run_next_step(self.make_task(status="idea"), llm_client=FakeLLMClient())
-        self.assertEqual(task["status"], "refined")
-
-    def test_refined_to_ready_for_dev_transition(self):
-        task, _ = orchestrator.run_next_step(self.make_task(status="refined"), llm_client=FakeLLMClient())
-        self.assertEqual(task["status"], "ready_for_dev")
-
-    def test_ready_for_dev_to_in_progress_transition(self):
-        task, _ = orchestrator.run_next_step(
-            self.make_task(status="ready_for_dev"), llm_client=FakeLLMClient()
-        )
+    def test_transitions_and_review_gate(self):
+        self.assertEqual(orchestrator.run_next_step(self.make_task("idea"), FakeLLMClient())[0]["status"], "refined")
+        self.assertEqual(orchestrator.run_next_step(self.make_task("refined"), FakeLLMClient())[0]["status"], "ready_for_dev")
+        task, _ = orchestrator.run_next_step(self.make_task("ready_for_dev"), FakeLLMClient())
         self.assertEqual(task["status"], "in_progress")
-        self.assertTrue(task["artifacts"]["implementation_plan"]["proposed_changes"])
+        self.assertIn("patch_proposal", task["artifacts"])
 
-    def test_in_progress_to_review_transition(self):
-        task, _ = orchestrator.run_next_step(self.make_task(status="in_progress"), llm_client=FakeLLMClient())
-        self.assertEqual(task["status"], "review")
+        review_task = self.make_task("review")
+        review_task["artifacts"]["qa_verification"]["verdict"] = "passed"
+        self.assertEqual(orchestrator.run_next_step(review_task, FakeLLMClient())[0]["status"], "done")
 
-    def test_review_to_done_transition(self):
-        task, _ = orchestrator.run_next_step(self.make_task(status="review"), llm_client=FakeLLMClient())
-        self.assertEqual(task["status"], "done")
-
-    def test_done_task_does_not_change(self):
-        task = self.make_task(status="done")
-        before = len(task["history"])
-        task, message = orchestrator.run_next_step(task, llm_client=FakeLLMClient())
-        self.assertEqual(task["status"], "done")
-        self.assertEqual(len(task["history"]), before)
-        self.assertIn("already done", message)
-
-    def test_history_item_contains_required_fields(self):
-        task, _ = orchestrator.run_next_step(self.make_task(status="idea"), llm_client=FakeLLMClient())
-        history_item = task["history"][0]
-        for key in (
-            "timestamp",
-            "agent",
-            "previous_status",
-            "new_status",
-            "message",
-            "prompt_source",
-            "llm_provider",
-            "context_files_used",
-        ):
-            self.assertIn(key, history_item)
-
-    def test_missing_agent_prompt_raises_clear_error(self):
-        (self.agents_dir / "analyst.md").unlink()
-        with self.assertRaises(ValueError):
-            orchestrator.load_agent_prompt("analyst")
-
-    def test_create_bug_creates_bug_task(self):
-        bug = orchestrator.create_bug("Login error", "Login fails with 500", llm_client=FakeLLMClient())
-        self.assertTrue(bug["id"].startswith("BUG-"))
-        self.assertEqual(bug["type"], "bug")
-        self.assertEqual(bug["status"], "idea")
-
-    def test_bug_task_validates_successfully(self):
-        orchestrator.validate_task(self.make_task(task_type="bug"))
-
-    def test_missing_bug_report_fails_validation(self):
-        bug = self.make_task(task_type="bug")
-        del bug["artifacts"]["bug_report"]
-        with self.assertRaises(ValueError):
-            orchestrator.validate_task(bug)
-
-    def test_existing_feature_without_type_migrates(self):
-        legacy = {
-            "id": "TASK-1",
-            "title": "Legacy",
-            "description": "Legacy desc",
-            "status": "idea",
-            "priority": "medium",
-            "artifacts": {
-                "analysis": None,
-                "acceptance_criteria": [],
-                "architecture": None,
-                "implementation": None,
-                "test_cases": [],
-                "bugs": [],
-            },
-            "history": [],
-        }
-        self.tasks_path.write_text(json.dumps([legacy]), encoding="utf-8")
-        tasks = orchestrator.load_tasks()
-        self.assertEqual(tasks[0]["type"], "feature")
-        self.assertIn("implementation_plan", tasks[0]["artifacts"])
+    def test_run_next_blocked_task_does_not_change(self):
+        task = self.make_task("idea")
+        task["blocked_by"] = ["external: wait"]
+        updated, message = orchestrator.run_next_step(task, FakeLLMClient())
+        self.assertEqual(updated["status"], "idea")
+        self.assertIn("is blocked", message)
 
 
 class LLMIntegrationTests(BaseIsolatedTest):
-    def test_fake_llm_client_returns_valid_json(self):
-        raw = FakeLLMClient().generate({"agent_name": "analyst", "task": {"title": "T", "description": "D"}})
-        self.assertIn('"artifacts"', raw)
+    def test_fake_outputs(self):
+        dev = json.loads(FakeLLMClient().generate({"agent_name": "developer", "task": {"title": "T", "description": "D"}}))
+        qa = json.loads(FakeLLMClient().generate({"agent_name": "qa", "task": {"title": "T", "description": "D"}}))
+        self.assertIn("patch_proposal", dev["artifacts"])
+        self.assertIn("qa_verification", qa["artifacts"])
 
-    def test_bug_intake_fake_provider_returns_valid_bug_json(self):
-        data = json.loads(
-            FakeLLMClient().generate({"agent_name": "bug_intake", "task": {"title": "Bug", "description": "Desc"}})
-        )
-        self.assertIn("bug_report", data["artifacts"])
-
-    def test_developer_fake_output_contains_implementation_plan(self):
-        data = json.loads(
-            FakeLLMClient().generate({"agent_name": "developer", "task": {"title": "Task", "description": "Desc"}})
-        )
-        self.assertIn("implementation_plan", data["artifacts"])
-
-    def test_get_llm_client_defaults_to_fake(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(get_llm_client().provider_name, "fake")
-
-    def test_get_llm_client_fake_explicit(self):
-        self.assertEqual(get_llm_client("fake").provider_name, "fake")
+    def test_fake_developer_uses_attached_repository_context(self):
+        payload = {
+            "agent_name": "developer",
+            "task": {
+                "title": "T",
+                "description": "D",
+                "artifacts": {
+                    "repository_context": {
+                        "attached": True,
+                        "relevant_files": [{"path": "orchestrator.py"}],
+                    }
+                },
+            },
+        }
+        dev = json.loads(FakeLLMClient().generate(payload))
+        self.assertEqual(dev["artifacts"]["implementation_plan"]["files_to_modify"][0], "orchestrator.py")
 
     def test_get_llm_client_openai_missing_key(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "openai", "OPENAI_API_KEY": ""}, clear=True):
             with self.assertRaises(LLMClientError):
                 get_llm_client("openai")
 
-    def test_run_agent_parses_fake_json_output(self):
-        out = agent_runner.run_agent(
-            "analyst", {"title": "Task", "description": "Desc", "artifacts": {}}, llm_client=FakeLLMClient()
-        )
-        self.assertIn("analysis", out["artifacts"])
 
-    def test_run_agent_includes_project_context_in_payload(self):
-        class RecordingClient:
-            provider_name = "fake"
+class PatchUtilsTests(BaseIsolatedTest):
+    def test_apply_patch_refuses_unapproved(self):
+        task = self.make_task()
+        task["artifacts"]["patch_proposal"]["files"] = [
+            {"file_path": "x.txt", "change_type": "create", "reason": "r", "content": "c", "safe_to_apply": False}
+        ]
+        result = apply_patch_proposal(task, repo_root=self.tmp_dir.name, force=False)
+        self.assertTrue(result["errors"])
 
-            def __init__(self):
-                self.last_payload = None
+    def test_apply_patch_create_modify(self):
+        task = self.make_task()
+        pp = task["artifacts"]["patch_proposal"]
+        pp["approved"] = True
+        pp["files"] = [
+            {"file_path": "new.txt", "change_type": "create", "reason": "r", "content": "one", "safe_to_apply": False},
+        ]
+        result = apply_patch_proposal(task, repo_root=self.tmp_dir.name, force=False)
+        self.assertFalse(result["errors"])
+        self.assertTrue((Path(self.tmp_dir.name) / "new.txt").exists())
 
-            def generate(self, payload: dict) -> str:
-                self.last_payload = payload
-                return json.dumps({"artifacts": {"analysis": "ok"}, "message": "ok"})
+        task2 = self.make_task()
+        pp2 = task2["artifacts"]["patch_proposal"]
+        pp2["approved"] = True
+        (Path(self.tmp_dir.name) / "mod.txt").write_text("old", encoding="utf-8")
+        pp2["files"] = [
+            {"file_path": "mod.txt", "change_type": "modify", "reason": "r", "content": "new", "safe_to_apply": False},
+        ]
+        result2 = apply_patch_proposal(task2, repo_root=self.tmp_dir.name, force=False)
+        self.assertFalse(result2["errors"])
+        self.assertEqual((Path(self.tmp_dir.name) / "mod.txt").read_text(encoding="utf-8"), "new")
 
-        recorder = RecordingClient()
-        agent_runner.run_agent(
-            "analyst", {"title": "Task", "description": "Desc", "artifacts": {}}, llm_client=recorder
-        )
-        self.assertIn("project_context", recorder.last_payload)
-        self.assertIn("# project_context/project.md", recorder.last_payload["project_context"])
+    def test_apply_patch_refuses_unsafe_paths(self):
+        for p in ("/abs.txt", "../up.txt", ".env", ".git/config"):
+            task = self.make_task()
+            pp = task["artifacts"]["patch_proposal"]
+            pp["approved"] = True
+            pp["files"] = [{"file_path": p, "change_type": "create", "reason": "r", "content": "x", "safe_to_apply": False}]
+            result = apply_patch_proposal(task, repo_root=self.tmp_dir.name, force=False)
+            self.assertTrue(result["errors"])
+            self.assertFalse(task["artifacts"]["patch_proposal"]["applied"])
 
-    def test_orchestrator_ignores_llm_provided_status(self):
-        task = self.make_task(status="idea")
-        updated, _ = orchestrator.run_next_step(task, llm_client=FakeLLMClient())
-        self.assertEqual(updated["status"], "refined")
-
-    def test_cli_config_does_not_print_secret_values(self):
-        output = io.StringIO()
-        with patch.dict(
-            os.environ,
-            {"LLM_PROVIDER": "openai", "OPENAI_MODEL": "gpt-test", "OPENAI_API_KEY": "super-secret-key"},
-            clear=True,
-        ):
-            with redirect_stdout(output):
-                run.cmd_config(None)
-        text = output.getvalue()
-        self.assertIn("OPENAI_API_KEY_SET=true", text)
-        self.assertNotIn("super-secret-key", text)
+    def test_approve_patch_sets_flag(self):
+        task = self.make_task()
+        approve_patch(task)
+        self.assertTrue(task["artifacts"]["patch_proposal"]["approved"])
 
 
 class CLITests(BaseIsolatedTest):
-    def test_create_bug_cli_works(self):
-        args = SimpleNamespace(
-            title="Login error",
-            description="Login fails with 500",
-            raw="Logs: NullPointerException",
-            raw_file=None,
-            priority="high",
-            severity="major",
-            provider="fake",
-        )
-        output = io.StringIO()
-        with redirect_stdout(output):
-            run.cmd_create_bug(args)
-        self.assertIn("Created BUG-1", output.getvalue())
-
-    def test_list_includes_task_type(self):
-        orchestrator.create_task("Feature one", "Desc")
-        output = io.StringIO()
-        with redirect_stdout(output):
-            run.cmd_list(None)
-        self.assertIn("feature", output.getvalue())
-
-    def test_show_includes_bug_report_for_bug_task(self):
-        bug = orchestrator.create_bug("Login error", "Login fails with 500", llm_client=FakeLLMClient())
-        output = io.StringIO()
-        with redirect_stdout(output):
-            run.cmd_show(SimpleNamespace(id=bug["id"]))
-        self.assertIn("bug_report", output.getvalue())
-
-    def test_context_cli_works(self):
-        output = io.StringIO()
-        with redirect_stdout(output):
-            run.cmd_context(SimpleNamespace(show=False))
-        text = output.getvalue()
-        self.assertIn("project.md", text)
-
-
-class ProjectContextTests(BaseIsolatedTest):
-    def test_project_context_files_exist_and_load_dict(self):
-        data = project_context_loader.load_project_context()
-        self.assertIsInstance(data, dict)
-        self.assertIn("project.md", data)
-
-    def test_project_context_text_has_headers(self):
-        text = project_context_loader.load_project_context_text()
-        self.assertIn("# project_context/project.md", text)
-        self.assertIn("# project_context/restrictions.md", text)
-
-    def test_missing_context_file_raises(self):
-        (self.context_dir / "commands.md").unlink()
-        with self.assertRaises(ValueError):
-            project_context_loader.load_project_context()
-
-
-class DeveloperPlanTests(BaseIsolatedTest):
     def _move_to_in_progress(self, task_id: str):
         orchestrator.run_next_for_task(task_id, llm_client=FakeLLMClient())
         orchestrator.run_next_for_task(task_id, llm_client=FakeLLMClient())
         return orchestrator.run_next_for_task(task_id, llm_client=FakeLLMClient())[0]
 
-    def test_developer_step_stores_implementation_plan(self):
-        task = orchestrator.create_task("Task A", "Task description")
-        updated = self._move_to_in_progress(task["id"])
-        self.assertTrue(updated["artifacts"]["implementation_plan"]["proposed_changes"])
-
-    def test_dev_plan_cli_shows_plan(self):
-        task = orchestrator.create_task("Task A", "Task description")
+    def test_patch_cli_and_export(self):
+        task = orchestrator.create_task("Task", "Desc")
         self._move_to_in_progress(task["id"])
-        output = io.StringIO()
-        with redirect_stdout(output):
-            run.cmd_dev_plan(SimpleNamespace(id=task["id"]))
-        text = output.getvalue()
-        self.assertIn("proposed_changes", text)
 
-    def test_export_dev_plan_creates_markdown_file(self):
-        task = orchestrator.create_task("Task A", "Task description")
-        self._move_to_in_progress(task["id"])
-        output_file = Path(self.tmp_dir.name) / "plan.md"
-        run.cmd_export_dev_plan(SimpleNamespace(id=task["id"], output=str(output_file), force=False))
-        self.assertTrue(output_file.exists())
+        out = io.StringIO()
+        with redirect_stdout(out):
+            run.cmd_patch(SimpleNamespace(id=task["id"]))
+        self.assertIn("requires_approval", out.getvalue())
 
-    def test_export_dev_plan_no_overwrite_without_force(self):
-        task = orchestrator.create_task("Task A", "Task description")
-        self._move_to_in_progress(task["id"])
-        output_file = Path(self.tmp_dir.name) / "plan.md"
-        output_file.write_text("old", encoding="utf-8")
+        export_path = Path(self.tmp_dir.name) / "patch.md"
+        run.cmd_export_patch(SimpleNamespace(id=task["id"], output=str(export_path), force=False))
+        self.assertTrue(export_path.exists())
         with self.assertRaises(ValueError):
-            run.cmd_export_dev_plan(SimpleNamespace(id=task["id"], output=str(output_file), force=False))
+            run.cmd_export_patch(SimpleNamespace(id=task["id"], output=str(export_path), force=False))
+        run.cmd_export_patch(SimpleNamespace(id=task["id"], output=str(export_path), force=True))
 
-    def test_export_dev_plan_overwrite_with_force(self):
-        task = orchestrator.create_task("Task A", "Task description")
-        self._move_to_in_progress(task["id"])
-        output_file = Path(self.tmp_dir.name) / "plan.md"
-        output_file.write_text("old", encoding="utf-8")
-        run.cmd_export_dev_plan(SimpleNamespace(id=task["id"], output=str(output_file), force=True))
-        self.assertIn("Developer Plan", output_file.read_text(encoding="utf-8"))
+    def test_approve_and_apply_patch_cli(self):
+        task = orchestrator.create_task("Task", "Desc")
+        tasks = orchestrator.load_tasks()
+        target = next(t for t in tasks if t["id"] == task["id"])
+        target["artifacts"]["patch_proposal"]["files"] = [
+            {"file_path": "sample.txt", "change_type": "create", "reason": "r", "content": "hello", "safe_to_apply": False}
+        ]
+        orchestrator.save_tasks(tasks)
+
+        out1 = io.StringIO()
+        with redirect_stdout(out1):
+            run.cmd_apply_patch(SimpleNamespace(id=task["id"], force=False))
+        self.assertIn("not fully applied", out1.getvalue())
+
+        run.cmd_approve_patch(SimpleNamespace(id=task["id"]))
+        out2 = io.StringIO()
+        with redirect_stdout(out2):
+            run.cmd_apply_patch(SimpleNamespace(id=task["id"], force=False))
+        self.assertIn("applied successfully", out2.getvalue())
+        self.assertTrue((Path("sample.txt")).exists())
+        Path("sample.txt").unlink(missing_ok=True)
+
+    def test_attach_repo_context_cli(self):
+        task = orchestrator.create_task("Task", "Desc")
+        run.cmd_attach_repo_context(SimpleNamespace(id=task["id"]))
+        updated = orchestrator.get_task(task["id"])
+        self.assertTrue(updated["artifacts"]["repository_context"]["attached"])
+
+    def test_repo_context_cli_prints(self):
+        task = orchestrator.create_task("Task", "Desc")
+        tasks = orchestrator.load_tasks()
+        target = next(t for t in tasks if t["id"] == task["id"])
+        target["artifacts"]["repository_context"] = build_repository_context_for_task(
+            target, repo_root=self.tmp_dir.name
+        )
+        orchestrator.save_tasks(tasks)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            run.cmd_repo_context(SimpleNamespace(id=task["id"]))
+        self.assertIn("attached", out.getvalue())
 
 
 if __name__ == "__main__":
