@@ -12,5 +12,20 @@
       "TASK-1"
     ],
     "file_path": "decisions/ADR-001.md"
+  },
+  {
+    "id": "ADR-002",
+    "title": "Telegram board — только отображение, приватный чат — для работы",
+    "status": "accepted",
+    "date": "2026-05-03",
+    "tags": [
+      "telegram",
+      "ux",
+      "architecture"
+    ],
+    "related_tasks": [
+      "TASK-5"
+    ],
+    "file_path": "decisions/ADR-002.md"
   }
 ]
