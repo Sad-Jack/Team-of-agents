@@ -815,6 +815,113 @@ def cmd_board_ping(args):
     asyncio.run(_run_ping())
 
 
+def cmd_board_post_task(args):
+    """Publish a task card to the Telegram Board.
+
+    Fetches the task by TASK_ID from local storage, routes it to the correct
+    board topic, and sends a formatted card.  With --dry-run no message is sent.
+    Does not print TELEGRAM_BOT_TOKEN or absolute paths.
+    """
+    import telegram_board
+    import telegram_message_links
+
+    task_id: str = args.task_id.strip()
+    dry_run: bool = getattr(args, "dry_run", False)
+
+    # Validate env / board config early so we fail fast even in live mode
+    board_enabled = telegram_board.is_board_enabled()
+    board_chat_id = telegram_board.get_board_chat_id()
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+
+    # Load task from local storage
+    try:
+        from orchestrator import get_task
+    except ImportError:
+        print("Error: orchestrator module not found")
+        raise SystemExit(1)
+
+    task = get_task(task_id)
+    if task is None:
+        print(f"Error: task {task_id!r} not found")
+        raise SystemExit(1)
+
+    topic_key = telegram_board.topic_key_for_task(task)
+    topic_id = telegram_board.get_topic_id(topic_key)
+    card_text = telegram_board.format_task_board_card(task)
+
+    if dry_run:
+        print(f"Board post-task — dry run (no message sent)")
+        print(f"Task:     {task_id}")
+        print(f"Status:   {task.get('status', '?')}")
+        print(f"Topic:    {topic_key} (thread id: {topic_id if topic_id else 'NOT SET'})")
+        print(f"Board:    {'enabled' if board_enabled else 'disabled'}")
+        print(f"Chat ID:  {'(set)' if board_chat_id else '(not set)'}")
+        print()
+        print("Card preview:")
+        print("---")
+        print(card_text)
+        print("---")
+        if topic_id is None:
+            env_var = telegram_board._TOPIC_KEY_ENV.get(topic_key, "")
+            print(f"\nWarning: {env_var} is not set — card would not be sent")
+        return
+
+    # Live mode — validate prerequisites
+    if not token:
+        print("Error: TELEGRAM_BOT_TOKEN is not set")
+        raise SystemExit(1)
+
+    if not board_enabled:
+        print("Error: Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
+        raise SystemExit(1)
+
+    if not board_chat_id:
+        print("Error: TELEGRAM_BOARD_CHAT_ID is not set")
+        raise SystemExit(1)
+
+    if topic_id is None:
+        env_var = telegram_board._TOPIC_KEY_ENV.get(topic_key, "")
+        print(f"Error: topic {topic_key!r} is not configured ({env_var} not set)")
+        raise SystemExit(1)
+
+    import asyncio
+
+    async def _run_post():
+        try:
+            from telegram import Bot
+        except ImportError:
+            print("Error: python-telegram-bot is not installed")
+            raise SystemExit(1)
+
+        bot = Bot(token=token)
+        try:
+            msg = await bot.send_message(
+                chat_id=board_chat_id,
+                message_thread_id=topic_id,
+                text=card_text,
+            )
+        except Exception as exc:
+            short = str(exc)[:200]
+            print(f"Error: failed to send message — {short}")
+            raise SystemExit(1)
+
+        sent_message_id = getattr(msg, "message_id", None)
+
+        # Save mapping
+        if sent_message_id is not None:
+            telegram_message_links.add_message_link(
+                chat_id=board_chat_id,
+                message_id=sent_message_id,
+                work_item_type="task",
+                work_item_id=task_id,
+                message_thread_id=topic_id,
+            )
+
+        print(f"Posted {task_id} to {topic_key} (message_id={sent_message_id})")
+
+    asyncio.run(_run_post())
+
+
 def cmd_managed_project(_args):
     info = validate_managed_repo_path()
     print("Управляемый проект:")
@@ -2077,6 +2184,19 @@ def build_parser():
         help="Ping a single topic by key (e.g. agent_log). Omit to ping all.",
     )
     board_ping_parser.set_defaults(func=cmd_board_ping)
+
+    board_post_task_parser = subparsers.add_parser(
+        "board-post-task", help="Post a task card to the Telegram Board"
+    )
+    board_post_task_parser.add_argument(
+        "task_id", metavar="TASK_ID",
+        help="Task identifier, e.g. TASK-1",
+    )
+    board_post_task_parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Preview the card without sending to Telegram",
+    )
+    board_post_task_parser.set_defaults(func=cmd_board_post_task)
 
     telegram_parser = subparsers.add_parser("telegram", help="Run Telegram bot in polling mode")
     telegram_parser.set_defaults(func=cmd_telegram)

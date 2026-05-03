@@ -138,13 +138,15 @@ def load_board_config_from_env() -> BoardConfig:
 # ---------------------------------------------------------------------------
 
 _TASK_STATUS_MAP: dict[str, BoardTopic] = {
-    "idea":        BoardTopic.task_ideas,
-    "ready":       BoardTopic.task_ready,
-    "in_progress": BoardTopic.task_active,
-    "review":      BoardTopic.task_active,
-    "done":        BoardTopic.task_active,
-    "blocked":     BoardTopic.task_blocked,
-    "cancelled":   BoardTopic.task_active,
+    "idea":          BoardTopic.task_ideas,
+    "refined":       BoardTopic.task_ideas,
+    "ready":         BoardTopic.task_ready,
+    "ready_for_dev": BoardTopic.task_ready,
+    "in_progress":   BoardTopic.task_active,
+    "review":        BoardTopic.task_active,
+    "done":          BoardTopic.task_active,
+    "blocked":       BoardTopic.task_blocked,
+    "cancelled":     BoardTopic.task_active,
 }
 
 _BUG_STATUS_MAP: dict[str, BoardTopic] = {
@@ -165,13 +167,15 @@ _RELEASE_STATUS_MAP: dict[str, BoardTopic] = {
 }
 
 _TASK_STATUS_LABELS: dict[str, str] = {
-    "idea":        "Идея",
-    "ready":       "Готова к работе",
-    "in_progress": "В работе",
-    "review":      "На ревью",
-    "done":        "Готово",
-    "blocked":     "Заблокирована",
-    "cancelled":   "Отменена",
+    "idea":          "Идея",
+    "refined":       "Детализирована",
+    "ready":         "Готова к работе",
+    "ready_for_dev": "Готова к разработке",
+    "in_progress":   "В работе",
+    "review":        "На ревью",
+    "done":          "Готово",
+    "blocked":       "Заблокирована",
+    "cancelled":     "Отменена",
 }
 
 _BUG_STATUS_LABELS: dict[str, str] = {
@@ -205,6 +209,30 @@ def topic_for_bug_status(status: str) -> Optional[BoardTopic]:
 def topic_for_release_status(status: str) -> Optional[BoardTopic]:
     """Return the board topic for a given release status, or None if unknown."""
     return _RELEASE_STATUS_MAP.get(status)
+
+
+def topic_key_for_task(task: dict) -> str:
+    """
+    Return the board topic *key* (string) for a task based on its status and fields.
+
+    Maps orchestrator-native statuses (idea, refined, ready_for_dev, in_progress,
+    review, done) and legacy statuses (ready, blocked, cancelled) to board topic keys.
+    Falls back to "task_ideas" for any unknown status.
+
+    A task with blocked_reason set is routed to "task_blocked" regardless of status,
+    unless the status already maps to a more specific topic.
+    """
+    status = (task.get("status") or "").strip()
+    topic = _TASK_STATUS_MAP.get(status)
+    if topic is not None:
+        return topic.value
+
+    # Unknown status: route blocked tasks with a reason to task_blocked
+    if task.get("blocked_reason"):
+        return BoardTopic.task_blocked.value
+
+    # Fallback
+    return BoardTopic.task_ideas.value
 
 
 def topic_for_decision() -> BoardTopic:
@@ -260,9 +288,8 @@ def format_task_board_card(task: dict) -> str:
     priority = task.get("priority", "")
     description = (task.get("description") or "").strip()
 
-    lines = [f"{icon} Задача: {title}"]
-    if item_id:
-        lines.append(f"ID: {item_id}")
+    header = f"{icon} {item_id} — {title}" if item_id else f"{icon} {title}"
+    lines = [header]
     lines.append(f"Статус: {status_label}")
     if priority:
         lines.append(f"Приоритет: {_priority_label(priority)}")

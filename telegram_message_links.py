@@ -41,8 +41,17 @@ def add_message_link(
     message_id: int,
     work_item_type: str,
     work_item_id: str,
+    message_thread_id: "int | None" = None,
 ) -> dict:
-    """Store a new Telegram message -> work item mapping and return the entry."""
+    """Store a new Telegram message -> work item mapping and return the entry.
+
+    Args:
+        chat_id:           Telegram chat id (positive for DM, negative for groups).
+        message_id:        Telegram message id.
+        work_item_type:    "task", "bug", "release", etc.
+        work_item_id:      Item identifier e.g. "TASK-12".
+        message_thread_id: Forum topic thread id (for Board messages). Optional.
+    """
     links = _load()
     entry: dict = {
         "telegram_chat_id": str(chat_id),
@@ -51,6 +60,8 @@ def add_message_link(
         "work_item_id": work_item_id,
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+    if message_thread_id is not None:
+        entry["message_thread_id"] = int(message_thread_id)
     links.append(entry)
     _save(links)
     return entry

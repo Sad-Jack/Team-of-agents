@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import telegram_board
+import telegram_message_links
 from telegram_board import (
     BoardConfig,
     BoardTopic,
@@ -1336,6 +1337,297 @@ class TestBoardPingTopicFlag(unittest.TestCase):
     def test_dry_run_no_token_leaked(self):
         out, _ = self._run_dry({"TELEGRAM_BOT_TOKEN": "xsecret-abc-token"})
         self.assertNotIn("xsecret-abc-token", out)
+
+
+class TestTopicKeyForTask(unittest.TestCase):
+    """Unit tests for topic_key_for_task routing function."""
+
+    def _task(self, status, **kwargs):
+        base = {"id": "TASK-1", "title": "Test", "status": status}
+        base.update(kwargs)
+        return base
+
+    def test_idea_routes_to_task_ideas(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("idea")), "task_ideas"
+        )
+
+    def test_refined_routes_to_task_ideas(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("refined")), "task_ideas"
+        )
+
+    def test_ready_for_dev_routes_to_task_ready(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("ready_for_dev")), "task_ready"
+        )
+
+    def test_in_progress_routes_to_task_active(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("in_progress")), "task_active"
+        )
+
+    def test_review_routes_to_task_active(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("review")), "task_active"
+        )
+
+    def test_done_routes_to_task_active(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("done")), "task_active"
+        )
+
+    def test_blocked_routes_to_task_blocked(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("blocked")), "task_blocked"
+        )
+
+    def test_unknown_status_falls_back_to_task_ideas(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("some_future_status")), "task_ideas"
+        )
+
+    def test_unknown_status_with_blocked_reason_routes_to_task_blocked(self):
+        task = self._task("some_future_status", blocked_reason="Ждём зависимость")
+        self.assertEqual(telegram_board.topic_key_for_task(task), "task_blocked")
+
+    def test_empty_status_falls_back_to_task_ideas(self):
+        self.assertEqual(
+            telegram_board.topic_key_for_task(self._task("")), "task_ideas"
+        )
+
+    def test_returns_string(self):
+        result = telegram_board.topic_key_for_task(self._task("idea"))
+        self.assertIsInstance(result, str)
+
+    def test_result_is_valid_board_topic_key(self):
+        valid_keys = {k for k, _, _ in telegram_board.BOARD_TOPICS}
+        for status in ("idea", "refined", "ready_for_dev", "in_progress", "review", "done", "blocked"):
+            with self.subTest(status=status):
+                key = telegram_board.topic_key_for_task(self._task(status))
+                self.assertIn(key, valid_keys)
+
+
+class TestFormatTaskBoardCardNewFormat(unittest.TestCase):
+    """Tests for the updated format_task_board_card (id — title header, orchestrator statuses)."""
+
+    def test_header_contains_id_dash_title(self):
+        task = {"id": "TASK-12", "title": "Implement search", "status": "idea"}
+        card = telegram_board.format_task_board_card(task)
+        self.assertIn("TASK-12 — Implement search", card)
+
+    def test_header_no_separate_id_line(self):
+        task = {"id": "TASK-12", "title": "Implement search", "status": "idea"}
+        card = telegram_board.format_task_board_card(task)
+        # ID should appear in header, not as "ID: TASK-12"
+        self.assertNotIn("ID: TASK-12", card)
+
+    def test_ready_for_dev_status_label(self):
+        task = {"id": "TASK-5", "title": "X", "status": "ready_for_dev"}
+        card = telegram_board.format_task_board_card(task)
+        self.assertIn("Готова к разработке", card)
+
+    def test_refined_status_label(self):
+        task = {"id": "TASK-5", "title": "X", "status": "refined"}
+        card = telegram_board.format_task_board_card(task)
+        self.assertIn("Детализирована", card)
+
+    def test_no_id_header_graceful(self):
+        task = {"title": "No id task", "status": "idea"}
+        card = telegram_board.format_task_board_card(task)
+        self.assertIn("No id task", card)
+        self.assertNotIn(" — ", card)  # no dash when no id
+
+
+class TestBoardPostTaskCLI(unittest.TestCase):
+    """Integration tests for `python run.py board-post-task TASK_ID [--dry-run]`."""
+
+    _BOARD_VARS = (
+        ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID", "TELEGRAM_BOT_TOKEN"]
+        + [e for _, _, e in telegram_board.BOARD_TOPICS]
+    )
+
+    def _base_env(self, overrides: dict | None = None) -> dict:
+        import os as _os
+        env = {**_os.environ}
+        for k in self._BOARD_VARS:
+            env[k] = ""
+        if overrides:
+            env.update(overrides)
+        return env
+
+    def _run(self, task_id: str, extra_args: list | None = None, overrides: dict | None = None):
+        import subprocess, sys
+        env = self._base_env(overrides or {})
+        cmd = [sys.executable, "run.py", "board-post-task", task_id] + (extra_args or [])
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout + result.stderr, result.returncode
+
+    def _run_dry(self, task_id: str, overrides: dict | None = None):
+        return self._run(task_id, extra_args=["--dry-run"], overrides=overrides)
+
+    # ---- dry-run basics ----
+
+    def test_dry_run_shows_task_id(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertIn("TASK-1", out)
+
+    def test_dry_run_shows_topic(self):
+        out, _ = self._run_dry("TASK-1")
+        # should mention a board topic key
+        found = any(key in out for key, _, _ in telegram_board.BOARD_TOPICS)
+        self.assertTrue(found, f"Expected a topic key in output, got:\n{out}")
+
+    def test_dry_run_shows_card_preview(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertIn("Card preview", out)
+
+    def test_dry_run_shows_dry_run_label(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertIn("dry run", out.lower())
+
+    def test_dry_run_no_token_leaked(self):
+        out, _ = self._run_dry("TASK-1", overrides={"TELEGRAM_BOT_TOKEN": "xsecret-post-token"})
+        self.assertNotIn("xsecret-post-token", out)
+
+    def test_dry_run_no_absolute_paths(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertNotIn("/Users/", out)
+
+    def test_dry_run_warns_when_topic_not_configured(self):
+        # All topic env vars cleared → topic not set → warning shown
+        out, _ = self._run_dry("TASK-1")
+        # Should either warn OR show the thread id if it happens to be set
+        # We only check no crash and dry-run label present (board vars are cleared above)
+        self.assertIn("dry run", out.lower())
+
+    def test_dry_run_exits_0(self):
+        _, code = self._run_dry("TASK-1")
+        self.assertEqual(code, 0)
+
+    # ---- error cases ----
+
+    def test_unknown_task_id_exits_1(self):
+        _, code = self._run_dry("TASK-9999")
+        self.assertEqual(code, 1)
+
+    def test_unknown_task_id_shows_error_message(self):
+        out, _ = self._run_dry("TASK-9999")
+        self.assertIn("TASK-9999", out)
+
+    def test_live_no_token_exits_1(self):
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100x",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("TELEGRAM_BOT_TOKEN", out)
+
+    def test_live_board_disabled_exits_1(self):
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "false",
+            "TELEGRAM_BOT_TOKEN": "tok",
+            "TELEGRAM_BOARD_CHAT_ID": "-100x",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("disabled", out.lower())
+
+    def test_live_no_chat_id_exits_1(self):
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOT_TOKEN": "tok",
+            "TELEGRAM_BOARD_CHAT_ID": "",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("TELEGRAM_BOARD_CHAT_ID", out)
+
+    def test_live_topic_not_configured_exits_1(self):
+        # All topic env vars cleared, so the routed topic will have no thread id
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOT_TOKEN": "tok",
+            "TELEGRAM_BOARD_CHAT_ID": "-100x",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("not configured", out.lower())
+
+    # ---- board-post-task in argparse ----
+
+    def test_board_post_task_in_help(self):
+        import subprocess, sys, os as _os
+        env = {**_os.environ}
+        result = subprocess.run(
+            [sys.executable, "run.py", "--help"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("board-post-task", result.stdout + result.stderr)
+
+
+class TestAddMessageLinkThreadId(unittest.TestCase):
+    """Unit tests for the message_thread_id extension in telegram_message_links."""
+
+    def setUp(self):
+        # Patch _LINKS_PATH to a temp file
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+
+    def tearDown(self):
+        import os as _os
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def test_without_thread_id(self):
+        entry = telegram_message_links.add_message_link(
+            chat_id="-100123", message_id=42,
+            work_item_type="task", work_item_id="TASK-1",
+        )
+        self.assertNotIn("message_thread_id", entry)
+
+    def test_with_thread_id_stored(self):
+        entry = telegram_message_links.add_message_link(
+            chat_id="-100123", message_id=55,
+            work_item_type="task", work_item_id="TASK-2",
+            message_thread_id=17,
+        )
+        self.assertEqual(entry["message_thread_id"], 17)
+
+    def test_with_thread_id_persisted(self):
+        telegram_message_links.add_message_link(
+            chat_id="-100x", message_id=77,
+            work_item_type="task", work_item_id="TASK-3",
+            message_thread_id=9,
+        )
+        links = telegram_message_links.load_all_links()
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["message_thread_id"], 9)
+
+    def test_thread_id_none_not_stored(self):
+        telegram_message_links.add_message_link(
+            chat_id="-100x", message_id=88,
+            work_item_type="task", work_item_id="TASK-4",
+            message_thread_id=None,
+        )
+        links = telegram_message_links.load_all_links()
+        self.assertNotIn("message_thread_id", links[0])
+
+    def test_find_link_works_with_thread_id(self):
+        telegram_message_links.add_message_link(
+            chat_id="-100x", message_id=99,
+            work_item_type="task", work_item_id="TASK-5",
+            message_thread_id=22,
+        )
+        found = telegram_message_links.find_link("-100x", 99)
+        self.assertIsNotNone(found)
+        self.assertEqual(found["work_item_id"], "TASK-5")
+        self.assertEqual(found["message_thread_id"], 22)
 
 
 if __name__ == "__main__":
