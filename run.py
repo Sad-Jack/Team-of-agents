@@ -816,10 +816,13 @@ def cmd_board_ping(args):
 
 
 def cmd_board_post_task(args):
-    """Publish a task card to the Telegram Board.
+    """Publish or update a task card on the Telegram Board (upsert).
 
-    Fetches the task by TASK_ID from local storage, routes it to the correct
-    board topic, and sends a formatted card.  With --dry-run no message is sent.
+    By default uses upsert logic: edits the existing card if a mapping is stored,
+    otherwise creates a new one.  With --dry-run no message is sent.
+
+    --force-new always creates a new message and overwrites the stored mapping.
+
     Does not print TELEGRAM_BOT_TOKEN or absolute paths.
     """
     import telegram_board
@@ -827,13 +830,9 @@ def cmd_board_post_task(args):
 
     task_id: str = args.task_id.strip()
     dry_run: bool = getattr(args, "dry_run", False)
+    force_new: bool = getattr(args, "force_new", False)
 
-    # Validate env / board config early so we fail fast even in live mode
-    board_enabled = telegram_board.is_board_enabled()
-    board_chat_id = telegram_board.get_board_chat_id()
-    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-
-    # Load task from local storage
+    # Load task from local storage first (fast fail on missing task)
     try:
         from orchestrator import get_task
     except ImportError:
@@ -848,14 +847,43 @@ def cmd_board_post_task(args):
     topic_key = telegram_board.topic_key_for_task(task)
     topic_id = telegram_board.get_topic_id(topic_key)
     card_text = telegram_board.format_task_board_card(task)
+    board_enabled = telegram_board.is_board_enabled()
+    board_chat_id = telegram_board.get_board_chat_id()
+
+    # Check for existing Board mapping
+    existing_link = None if force_new else telegram_message_links.find_board_link("task", task_id)
+    archive_on_move = telegram_board.is_archive_on_move_enabled()
+
+    # Determine dry-run mode hint
+    if force_new:
+        mode_hint = "force-new (always create)"
+    elif existing_link:
+        prev_topic = existing_link.get("topic_key", "")
+        if prev_topic and prev_topic != topic_key:
+            archive_hint = " + tombstone on old card" if archive_on_move else " (no tombstone)"
+            mode_hint = (
+                f"move {prev_topic} → {topic_key}{archive_hint} "
+                f"(existing message_id={existing_link['telegram_message_id']})"
+            )
+        else:
+            mode_hint = f"update (existing message_id={existing_link['telegram_message_id']})"
+    else:
+        mode_hint = "create (no existing card found)"
 
     if dry_run:
-        print(f"Board post-task — dry run (no message sent)")
+        print("Board post-task — dry run (no message sent)")
         print(f"Task:     {task_id}")
         print(f"Status:   {task.get('status', '?')}")
         print(f"Topic:    {topic_key} (thread id: {topic_id if topic_id else 'NOT SET'})")
         print(f"Board:    {'enabled' if board_enabled else 'disabled'}")
         print(f"Chat ID:  {'(set)' if board_chat_id else '(not set)'}")
+        print(f"Mode:     {mode_hint}")
+        buttons = telegram_board.build_task_card_keyboard(task)
+        if buttons:
+            btn_labels = "  ".join(f"[{label}]" for label, _ in buttons)
+            print(f"Buttons:  {btn_labels}")
+        else:
+            print("Buttons:  (none)")
         print()
         print("Card preview:")
         print("---")
@@ -867,6 +895,7 @@ def cmd_board_post_task(args):
         return
 
     # Live mode — validate prerequisites
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         print("Error: TELEGRAM_BOT_TOKEN is not set")
         raise SystemExit(1)
@@ -886,7 +915,7 @@ def cmd_board_post_task(args):
 
     import asyncio
 
-    async def _run_post():
+    async def _run_upsert():
         try:
             from telegram import Bot
         except ImportError:
@@ -894,32 +923,33 @@ def cmd_board_post_task(args):
             raise SystemExit(1)
 
         bot = Bot(token=token)
-        try:
-            msg = await bot.send_message(
-                chat_id=board_chat_id,
-                message_thread_id=topic_id,
-                text=card_text,
+        result = await telegram_board.upsert_task_board_card(bot, task, force_new=force_new)
+
+        status = result["status"]
+        if status == "created":
+            print(f"Created {task_id} card in {topic_key} (message_id={result['message_id']})")
+        elif status == "updated":
+            print(f"Updated {task_id} card in {topic_key} (message_id={result['message_id']})")
+        elif status == "recreated":
+            print(f"Recreated {task_id} card in {topic_key} (message_id={result['message_id']})")
+        elif status == "moved":
+            prev = result.get("prev_topic_key", "?")
+            print(f"Moved {task_id} card: {prev} → {topic_key} (message_id={result['message_id']})")
+        elif status == "moved_archive_failed":
+            prev = result.get("prev_topic_key", "?")
+            print(
+                f"Moved {task_id} card: {prev} → {topic_key} (message_id={result['message_id']})"
+                f"\nWarning: could not archive old card — {result.get('reason', '')}"
             )
-        except Exception as exc:
-            short = str(exc)[:200]
-            print(f"Error: failed to send message — {short}")
+        elif status == "timeout":
+            print(f"Warning: Telegram timeout for {task_id} — {result.get('reason', '')}")
+            raise SystemExit(1)
+        else:
+            reason = result.get("reason") or status
+            print(f"Error: {reason}")
             raise SystemExit(1)
 
-        sent_message_id = getattr(msg, "message_id", None)
-
-        # Save mapping
-        if sent_message_id is not None:
-            telegram_message_links.add_message_link(
-                chat_id=board_chat_id,
-                message_id=sent_message_id,
-                work_item_type="task",
-                work_item_id=task_id,
-                message_thread_id=topic_id,
-            )
-
-        print(f"Posted {task_id} to {topic_key} (message_id={sent_message_id})")
-
-    asyncio.run(_run_post())
+    asyncio.run(_run_upsert())
 
 
 def cmd_managed_project(_args):
@@ -2195,6 +2225,10 @@ def build_parser():
     board_post_task_parser.add_argument(
         "--dry-run", action="store_true", default=False,
         help="Preview the card without sending to Telegram",
+    )
+    board_post_task_parser.add_argument(
+        "--force-new", action="store_true", default=False,
+        help="Always create a new message, overwriting the stored mapping",
     )
     board_post_task_parser.set_defaults(func=cmd_board_post_task)
 

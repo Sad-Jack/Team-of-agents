@@ -1224,5 +1224,632 @@ class TestBoardPingHandler(unittest.TestCase):
         self.assertNotIn("❌", text)
 
 
+class TestBoardFocusCallback(unittest.IsolatedAsyncioTestCase):
+    """Tests for board_focus_callback (🎯 В фокус inline button)."""
+
+    def setUp(self):
+        from unittest.mock import AsyncMock, MagicMock
+        self._bot = MagicMock()
+        self._bot.send_message = AsyncMock()
+
+    def _make_update(self, data="board:task:focus:TASK-1", user_id="42"):
+        upd = _FakeCallbackUpdate(data, user_id=user_id)
+        return upd
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            bot=self._bot,
+            bot_data={"telegram_config": {"owner_id": owner_id}},
+        )
+
+    async def test_focus_callback_registered(self):
+        self.assertTrue(callable(telegram_bot.board_focus_callback))
+
+    async def test_non_owner_silently_ignored(self):
+        upd = self._make_update(user_id="99")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.board_focus_callback(upd, ctx)
+        # Non-owner: no DM sent
+        self._bot.send_message.assert_not_called()
+        # No edit to the public board message
+        self.assertEqual(upd.callback_query.edits, [])
+
+    async def test_invalid_callback_data_no_crash(self):
+        upd = self._make_update(data="invalid:data")
+        ctx = self._make_ctx()
+        await telegram_bot.board_focus_callback(upd, ctx)
+        # No error, no DM
+        self._bot.send_message.assert_not_called()
+
+    async def test_owner_sets_focus_and_sends_dm(self):
+        upd = self._make_update(data="board:task:focus:TASK-1", user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        with patch("telegram_bot.set_active_task") as mock_focus:
+            mock_focus.return_value = {"session_id": "telegram:42"}
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "My Task"}):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        mock_focus.assert_called_once()
+        self._bot.send_message.assert_called_once()
+        dm_text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("TASK-1", dm_text)
+        self.assertIn("🎯", dm_text)
+
+    async def test_dm_sent_to_owner_user_id(self):
+        upd = self._make_update(data="board:task:focus:TASK-5", user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "telegram:42"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-5", "title": "T"}):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        call_kwargs = self._bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs["chat_id"], "42")  # owner's user_id
+
+    async def test_query_answered(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value=None):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        self.assertEqual(len(upd.callback_query.answers), 1)
+
+
+class TestBoardStartCallback(unittest.IsolatedAsyncioTestCase):
+    """Tests for board_start_callback (🚧 В работу inline button)."""
+
+    def setUp(self):
+        from unittest.mock import AsyncMock, MagicMock
+        self._bot = MagicMock()
+        self._bot.send_message = AsyncMock()
+        self._bot.edit_message_text = AsyncMock()
+        # In-memory task store patched via orchestrator methods
+        self._tasks = [
+            {"id": "TASK-1", "title": "Ready Task", "status": "ready_for_dev", "priority": "medium"},
+            {"id": "TASK-2", "title": "In-progress Task", "status": "in_progress", "priority": "low"},
+        ]
+        self._saved_tasks = None
+
+        def _load_tasks():
+            return list(self._tasks)
+
+        def _save_tasks(tasks):
+            self._tasks = list(tasks)
+
+        self._load_patcher = patch("telegram_bot.orchestrator.load_tasks", side_effect=_load_tasks)
+        self._save_patcher = patch("telegram_bot.orchestrator.save_tasks", side_effect=_save_tasks)
+        self._load_patcher.start()
+        self._save_patcher.start()
+
+    def tearDown(self):
+        self._load_patcher.stop()
+        self._save_patcher.stop()
+
+    def _make_update(self, data="board:task:start:TASK-1", user_id="42"):
+        return _FakeCallbackUpdate(data, user_id=user_id)
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            bot=self._bot,
+            bot_data={"telegram_config": {"owner_id": owner_id}},
+        )
+
+    async def test_start_callback_registered(self):
+        self.assertTrue(callable(telegram_bot.board_start_callback))
+
+    async def test_non_owner_silently_ignored(self):
+        upd = self._make_update(user_id="99")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.board_start_callback(upd, ctx)
+        self._bot.send_message.assert_not_called()
+
+    async def test_invalid_callback_data_no_crash(self):
+        upd = self._make_update(data="bad:data")
+        ctx = self._make_ctx()
+        await telegram_bot.board_start_callback(upd, ctx)
+        self._bot.send_message.assert_not_called()
+
+    async def test_task_not_found_sends_error_dm(self):
+        upd = self._make_update(data="board:task:start:TASK-999", user_id="42")
+        ctx = self._make_ctx()
+        await telegram_bot.board_start_callback(upd, ctx)
+        self._bot.send_message.assert_called_once()
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("не найдена", text)
+
+    async def test_already_in_progress_sends_message(self):
+        upd = self._make_update(data="board:task:start:TASK-2", user_id="42")
+        ctx = self._make_ctx()
+        await telegram_bot.board_start_callback(upd, ctx)
+        self._bot.send_message.assert_called_once()
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("уже в работе", text)
+
+    async def test_sets_status_to_in_progress(self):
+        upd = self._make_update(data="board:task:start:TASK-1", user_id="42")
+        ctx = self._make_ctx()
+        from unittest.mock import AsyncMock
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_board.upsert_task_board_card", new=AsyncMock(return_value={"status": "skipped"})):
+                await telegram_bot.board_start_callback(upd, ctx)
+        task = next(t for t in self._tasks if t["id"] == "TASK-1")
+        self.assertEqual(task["status"], "in_progress")
+
+    async def test_sets_focus_on_task(self):
+        upd = self._make_update(data="board:task:start:TASK-1", user_id="42")
+        ctx = self._make_ctx()
+        from unittest.mock import AsyncMock
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_focus:
+            with patch("telegram_board.upsert_task_board_card", new=AsyncMock(return_value={"status": "skipped"})):
+                await telegram_bot.board_start_callback(upd, ctx)
+        mock_focus.assert_called_once()
+        args, kwargs = mock_focus.call_args
+        # task_id is the second positional arg
+        self.assertEqual(args[1], "TASK-1")
+
+    async def test_sends_dm_with_task_info(self):
+        upd = self._make_update(data="board:task:start:TASK-1", user_id="42")
+        ctx = self._make_ctx()
+        from unittest.mock import AsyncMock
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_board.upsert_task_board_card", new=AsyncMock(return_value={"status": "skipped"})):
+                await telegram_bot.board_start_callback(upd, ctx)
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("TASK-1", text)
+        self.assertIn("🚧", text)
+
+    async def test_query_answered(self):
+        upd = self._make_update(data="board:task:start:TASK-1", user_id="42")
+        ctx = self._make_ctx()
+        from unittest.mock import AsyncMock
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_board.upsert_task_board_card", new=AsyncMock(return_value={"status": "skipped"})):
+                await telegram_bot.board_start_callback(upd, ctx)
+        self.assertEqual(len(upd.callback_query.answers), 1)
+
+
+class TestFormatFocus(unittest.TestCase):
+    """Unit tests for format_focus and format_focus_indicator."""
+
+    def _focus(self, task_id=None, release_id=None, decision_id=None):
+        return {
+            "active_task_id": task_id,
+            "active_release_id": release_id,
+            "active_decision_id": decision_id,
+            "summary": "ok",
+        }
+
+    def test_format_focus_no_focus(self):
+        result = telegram_bot.format_focus(self._focus())
+        self.assertIn("Фокус не выбран", result)
+
+    def test_format_focus_task_shows_id(self):
+        task = {"id": "TASK-1", "title": "Healthcheck", "status": "in_progress"}
+        result = telegram_bot.format_focus(self._focus(task_id="TASK-1"), task=task)
+        self.assertIn("TASK-1", result)
+        self.assertIn("Healthcheck", result)
+
+    def test_format_focus_task_shows_status(self):
+        task = {"id": "TASK-1", "title": "T", "status": "ready_for_dev"}
+        result = telegram_bot.format_focus(self._focus(task_id="TASK-1"), task=task)
+        self.assertIn("Готова к разработке", result)
+
+    def test_format_focus_task_shows_clear_hint(self):
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        result = telegram_bot.format_focus(self._focus(task_id="TASK-1"), task=task)
+        self.assertIn("/clear_focus", result)
+
+    def test_format_focus_release(self):
+        result = telegram_bot.format_focus(self._focus(release_id="REL-001"))
+        self.assertIn("REL-001", result)
+        self.assertIn("/clear_focus", result)
+
+    def test_format_focus_decision(self):
+        result = telegram_bot.format_focus(self._focus(decision_id="ADR-001"))
+        self.assertIn("ADR-001", result)
+
+    def test_format_focus_no_absolute_paths(self):
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        result = telegram_bot.format_focus(self._focus(task_id="TASK-1"), task=task)
+        self.assertNotIn("/Users/", result)
+
+    def test_indicator_empty_when_no_focus(self):
+        self.assertEqual("", telegram_bot.format_focus_indicator(self._focus()))
+
+    def test_indicator_shows_id_and_title(self):
+        task = {"id": "TASK-1", "title": "My Task", "status": "idea"}
+        result = telegram_bot.format_focus_indicator(self._focus(task_id="TASK-1"), task=task)
+        self.assertIn("TASK-1", result)
+        self.assertIn("My Task", result)
+
+    def test_indicator_shows_id_without_title(self):
+        task = {"id": "TASK-1", "title": "", "status": "idea"}
+        result = telegram_bot.format_focus_indicator(self._focus(task_id="TASK-1"), task=task)
+        self.assertIn("TASK-1", result)
+
+    def test_indicator_release(self):
+        result = telegram_bot.format_focus_indicator(self._focus(release_id="REL-001"))
+        self.assertIn("REL-001", result)
+
+
+class TestCheckFocusSwitch(unittest.TestCase):
+    """Unit tests for _check_focus_switch."""
+
+    def test_vozmi_v_fokus(self):
+        result = telegram_bot._check_focus_switch("возьми TASK-2 в фокус")
+        self.assertEqual(result, "TASK-2")
+
+    def test_pereklyuchis_na(self):
+        result = telegram_bot._check_focus_switch("переключись на TASK-5")
+        self.assertEqual(result, "TASK-5")
+
+    def test_fokus_na(self):
+        result = telegram_bot._check_focus_switch("фокус на BUG-3")
+        self.assertEqual(result, "BUG-3")
+
+    def test_case_insensitive(self):
+        result = telegram_bot._check_focus_switch("возьми task-1 в фокус")
+        self.assertEqual(result, "TASK-1")
+
+    def test_regular_message_returns_none(self):
+        self.assertIsNone(telegram_bot._check_focus_switch("создай задачу"))
+        self.assertIsNone(telegram_bot._check_focus_switch("статус проекта"))
+        self.assertIsNone(telegram_bot._check_focus_switch("что делать дальше"))
+
+    def test_no_task_id_returns_none(self):
+        self.assertIsNone(telegram_bot._check_focus_switch("переключись"))
+
+    def test_bug_id_extracted(self):
+        result = telegram_bot._check_focus_switch("возьми BUG-10 в фокус")
+        self.assertEqual(result, "BUG-10")
+
+
+class TestFocusHandler(unittest.IsolatedAsyncioTestCase):
+    """Tests for /focus command."""
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            args=[],
+            bot_data={"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}},
+        )
+
+    async def test_focus_no_focus_shows_not_set(self):
+        upd = _FakeUpdate(user_id="42", text="/focus")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.get_focus", return_value={
+            "active_task_id": None, "active_release_id": None,
+            "active_decision_id": None, "summary": "Фокус не установлен.",
+        }):
+            await telegram_bot.focus_handler(upd, ctx)
+        self.assertIn("Фокус не выбран", upd.message.replies[0])
+
+    async def test_focus_shows_active_task(self):
+        upd = _FakeUpdate(user_id="42", text="/focus")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.get_focus", return_value={
+            "active_task_id": "TASK-1", "active_release_id": None,
+            "active_decision_id": None, "summary": "ok",
+        }):
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "T", "status": "idea"}):
+                await telegram_bot.focus_handler(upd, ctx)
+        self.assertIn("TASK-1", upd.message.replies[0])
+
+    async def test_focus_with_task_id_arg_sets_focus(self):
+        """'/focus TASK-1' should call set_active_task."""
+        upd = _FakeUpdate(user_id="42", text="/focus TASK-1")
+        ctx = SimpleNamespace(
+            args=["TASK-1"],
+            bot_data={"telegram_config": {"owner_id": "42", "dry_run_by_default": True}},
+        )
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_set:
+            with patch("telegram_bot.get_focus", return_value={
+                "active_task_id": "TASK-1", "active_release_id": None,
+                "active_decision_id": None, "summary": "ok",
+            }):
+                with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "T", "status": "idea"}):
+                    await telegram_bot.focus_handler(upd, ctx)
+        mock_set.assert_called_once()
+        self.assertIn("TASK-1", upd.message.replies[0])
+
+    async def test_focus_invalid_task_id_replies_not_found(self):
+        upd = _FakeUpdate(user_id="42", text="/focus TASK-999")
+        ctx = SimpleNamespace(
+            args=["TASK-999"],
+            bot_data={"telegram_config": {"owner_id": "42", "dry_run_by_default": True}},
+        )
+        from conversation_context import ConversationContextError
+        with patch("telegram_bot.set_active_task", side_effect=ConversationContextError("Task not found: TASK-999")):
+            await telegram_bot.focus_handler(upd, ctx)
+        self.assertIn("не найдена", upd.message.replies[0])
+
+    async def test_focus_denied_for_non_owner(self):
+        upd = _FakeUpdate(user_id="99", text="/focus")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.focus_handler(upd, ctx)
+        self.assertIn("denied", upd.message.replies[0].lower())
+
+    async def test_focus_no_secrets_in_reply(self):
+        upd = _FakeUpdate(user_id="42", text="/focus")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.get_focus", return_value={
+            "active_task_id": "TASK-1", "active_release_id": None,
+            "active_decision_id": None, "summary": "ok",
+        }):
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "T", "status": "idea"}):
+                await telegram_bot.focus_handler(upd, ctx)
+        reply = upd.message.replies[0]
+        self.assertNotIn("/Users/", reply)
+        self.assertNotIn("token", reply.lower())
+
+
+class TestClearFocusHandler(unittest.IsolatedAsyncioTestCase):
+    """Tests for /clear_focus command."""
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            args=[],
+            bot_data={"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}},
+        )
+
+    async def test_clear_focus_with_active_task_replies_cleared(self):
+        upd = _FakeUpdate(user_id="42", text="/clear_focus")
+        ctx = self._make_ctx()
+        pre = {"active_task_id": "TASK-1", "active_release_id": None, "active_decision_id": None, "summary": "ok"}
+        after = {"active_task_id": None, "active_release_id": None, "active_decision_id": None, "summary": "Фокус не установлен."}
+        with patch("telegram_bot.get_focus", return_value=pre):
+            with patch("telegram_bot.clear_focus"):
+                await telegram_bot.clear_focus_handler(upd, ctx)
+        self.assertIn("снят", upd.message.replies[0].lower())
+
+    async def test_clear_focus_no_focus_replies_no_active(self):
+        upd = _FakeUpdate(user_id="42", text="/clear_focus")
+        ctx = self._make_ctx()
+        no_focus = {"active_task_id": None, "active_release_id": None, "active_decision_id": None, "summary": "ok"}
+        with patch("telegram_bot.get_focus", return_value=no_focus):
+            with patch("telegram_bot.clear_focus"):
+                await telegram_bot.clear_focus_handler(upd, ctx)
+        self.assertIn("нет активного фокуса", upd.message.replies[0].lower())
+
+    async def test_clear_focus_denied_for_non_owner(self):
+        upd = _FakeUpdate(user_id="99", text="/clear_focus")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.clear_focus_handler(upd, ctx)
+        self.assertIn("denied", upd.message.replies[0].lower())
+
+    async def test_clear_focus_no_secrets_in_reply(self):
+        upd = _FakeUpdate(user_id="42", text="/clear_focus")
+        ctx = self._make_ctx()
+        no_focus = {"active_task_id": None, "active_release_id": None, "active_decision_id": None, "summary": "ok"}
+        with patch("telegram_bot.get_focus", return_value=no_focus):
+            with patch("telegram_bot.clear_focus"):
+                await telegram_bot.clear_focus_handler(upd, ctx)
+        self.assertNotIn("/Users/", upd.message.replies[0])
+
+
+class TestFocusSwitchInHandleUserText(unittest.IsolatedAsyncioTestCase):
+    """Tests for natural-language focus switching in handle_user_text."""
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            args=[],
+            bot_data={"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}},
+        )
+
+    async def test_vozmi_v_fokus_sets_focus(self):
+        upd = _FakeUpdate(user_id="42", text="возьми TASK-2 в фокус")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_set:
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-2", "title": "My Task", "status": "idea"}):
+                await telegram_bot.handle_user_text(upd, ctx, "возьми TASK-2 в фокус")
+        mock_set.assert_called_once()
+        self.assertIn("TASK-2", upd.message.replies[0])
+        self.assertIn("🎯", upd.message.replies[0])
+
+    async def test_pereklyuchis_na_sets_focus(self):
+        upd = _FakeUpdate(user_id="42", text="переключись на TASK-3")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-3", "title": "Task 3", "status": "idea"}):
+                await telegram_bot.handle_user_text(upd, ctx, "переключись на TASK-3")
+        self.assertIn("TASK-3", upd.message.replies[0])
+
+    async def test_focus_switch_not_found(self):
+        upd = _FakeUpdate(user_id="42", text="возьми TASK-999 в фокус")
+        ctx = self._make_ctx()
+        from conversation_context import ConversationContextError
+        with patch("telegram_bot.set_active_task", side_effect=ConversationContextError("not found")):
+            await telegram_bot.handle_user_text(upd, ctx, "возьми TASK-999 в фокус")
+        self.assertIn("не найдена", upd.message.replies[0].lower())
+
+    async def test_focus_switch_non_owner_denied(self):
+        upd = _FakeUpdate(user_id="99", text="возьми TASK-1 в фокус")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.handle_user_text(upd, ctx, "возьми TASK-1 в фокус")
+        self.assertIn("denied", upd.message.replies[0].lower())
+
+    async def test_regular_text_not_intercepted(self):
+        """Non-focus-switch text should NOT be intercepted by the focus-switch handler."""
+        upd = _FakeUpdate(user_id="42", text="создай задачу")
+        ctx = self._make_ctx()
+        # The supervisor/fast router runs — patch it to verify focus-switch did NOT intercept
+        with patch("telegram_bot.set_active_task") as mock_set:
+            with patch("telegram_bot.telegram_fast_router.try_route", return_value="fast reply"):
+                await telegram_bot.handle_user_text(upd, ctx, "создай задачу")
+        # set_active_task should NOT have been called by the focus-switch logic
+        mock_set.assert_not_called()
+
+
+class TestFocusIndicatorInResponses(unittest.IsolatedAsyncioTestCase):
+    """Focus indicator appears in responses when focus is active."""
+
+    def _make_ctx(self, owner_id="42", dry_run=False):
+        return SimpleNamespace(
+            args=[],
+            bot=SimpleNamespace(send_message=None),
+            bot_data={"telegram_config": {
+                "owner_id": owner_id,
+                "dry_run_by_default": dry_run,
+            }},
+        )
+
+    _PLAN = {
+        "intent": "create_task",
+        "confidence": 0.9,
+        "requires_confirmation": False,
+        "action": {"name": "create_task", "args": {"title": "T"}},
+        "explanation": "ok",
+        "warnings": [],
+    }
+
+    async def test_indicator_appended_after_execute(self):
+        """Focus indicator should appear in execute reply when focus is active."""
+        upd = _FakeUpdate(user_id="42", text="создай задачу T")
+        ctx = self._make_ctx(dry_run=False)
+
+        active_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                        "active_decision_id": None, "summary": "ok"}
+        result = {"executed": True, "action": "create_task",
+                  "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
+
+        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+            with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                with patch("telegram_bot.get_focus", return_value=active_focus):
+                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "Healthcheck", "status": "idea"}):
+                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+
+        combined = "\n".join(upd.message.replies)
+        self.assertIn("🎯", combined)
+        self.assertIn("TASK-1", combined)
+
+    async def test_no_indicator_when_no_focus(self):
+        """No indicator when focus is empty."""
+        upd = _FakeUpdate(user_id="42", text="создай задачу T")
+        ctx = self._make_ctx(dry_run=False)
+
+        no_focus = {"active_task_id": None, "active_release_id": None,
+                    "active_decision_id": None, "summary": "Фокус не установлен."}
+        result = {"executed": True, "action": "create_task",
+                  "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
+
+        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+            with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                with patch("telegram_bot.get_focus", return_value=no_focus):
+                    with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+                        await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+
+        combined = "\n".join(upd.message.replies)
+        self.assertNotIn("🎯 Фокус:", combined)
+
+    async def test_create_task_preserves_existing_focus(self):
+        """After create_task, the original focus task should be restored."""
+        upd = _FakeUpdate(user_id="42", text="создай задачу T")
+        ctx = self._make_ctx(dry_run=False)
+
+        pre_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                     "active_decision_id": None, "summary": "ok"}
+        post_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                      "active_decision_id": None, "summary": "ok"}
+        result = {"executed": True, "action": "create_task",
+                  "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
+
+        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+            with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
+                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
+                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_set:
+                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+
+        # set_active_task should have been called to RESTORE pre_task focus
+        mock_set.assert_called_once_with(
+            "telegram:42", "TASK-1", user_id="42", channel="telegram"
+        )
+
+    async def test_create_task_note_about_preserved_focus(self):
+        """Reply should include note that existing focus was not changed."""
+        upd = _FakeUpdate(user_id="42", text="создай задачу T")
+        ctx = self._make_ctx(dry_run=False)
+
+        pre_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                     "active_decision_id": None, "summary": "ok"}
+        post_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                      "active_decision_id": None, "summary": "ok"}
+        result = {"executed": True, "action": "create_task",
+                  "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
+
+        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+            with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
+                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
+                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+
+        combined = "\n".join(upd.message.replies)
+        self.assertIn("TASK-1", combined)
+        self.assertIn("фокус", combined.lower())
+
+    async def test_start_handler_shows_focus_indicator(self):
+        """start_handler should show focus indicator when focus is active."""
+        upd = _FakeUpdate(user_id="42", text="/start")
+        ctx = self._make_ctx()
+        active_focus = {"active_task_id": "TASK-1", "active_release_id": None,
+                        "active_decision_id": None, "summary": "ok"}
+        with patch("telegram_bot.get_focus", return_value=active_focus):
+            with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
+                with patch("managed_project.get_managed_project_info", return_value={"managed_repo_path": "."}):
+                    await telegram_bot.start_handler(upd, ctx)
+        combined = "\n".join(upd.message.replies)
+        self.assertIn("TASK-1", combined)
+
+
+class TestBoardFocusCallbackDM(unittest.IsolatedAsyncioTestCase):
+    """Tests that board_focus_callback sends rich DM with hint."""
+
+    def setUp(self):
+        from unittest.mock import AsyncMock, MagicMock
+        self._bot = MagicMock()
+        self._bot.send_message = AsyncMock()
+
+    def _make_update(self, data="board:task:focus:TASK-1", user_id="42"):
+        return _FakeCallbackUpdate(data, user_id=user_id)
+
+    def _make_ctx(self, owner_id="42"):
+        return SimpleNamespace(
+            bot=self._bot,
+            bot_data={"telegram_config": {"owner_id": owner_id}},
+        )
+
+    async def test_dm_includes_clear_focus_hint(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value={
+                "id": "TASK-1", "title": "HC", "status": "ready_for_dev"
+            }):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("/clear_focus", text)
+        self.assertIn("TASK-1", text)
+
+    async def test_dm_includes_task_status(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value={
+                "id": "TASK-1", "title": "HC", "status": "ready_for_dev"
+            }):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertIn("Готова к разработке", text)
+
+    async def test_dm_no_absolute_paths(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx()
+        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+            with patch("telegram_bot.orchestrator.get_task", return_value={
+                "id": "TASK-1", "title": "HC", "status": "idea"
+            }):
+                await telegram_bot.board_focus_callback(upd, ctx)
+        text = self._bot.send_message.call_args.kwargs.get("text", "")
+        self.assertNotIn("/Users/", text)
+
+
 if __name__ == "__main__":
     unittest.main()

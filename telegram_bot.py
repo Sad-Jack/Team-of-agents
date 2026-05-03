@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,39 @@ def load_telegram_config() -> dict:
 
 
 PENDING_ACTIONS: dict[str, dict] = {}
+
+# Focus-related supervisor action names — don't append the focus indicator to their replies
+# (the reply IS about focus, appending would be redundant).
+_FOCUS_ACTIONS: frozenset[str] = frozenset({
+    "focus", "clear_focus", "set_focus_task", "set_focus_release", "set_focus_decision",
+})
+
+# Regex to detect a TASK-X / BUG-X id in free text (case-insensitive).
+_TASK_ID_RE = re.compile(r"\b((?:TASK|BUG)-\d+)\b", re.IGNORECASE)
+
+# Keywords/phrases that signal "switch focus to this task".
+_FOCUS_SWITCH_KEYWORDS = (
+    "в фокус",
+    "переключись на",
+    "возьми",
+    "фокус на",
+    "сфокусируйся",
+    "перейди к",
+    "возьми в фокус",
+)
+
+# Russian status labels used in focus display
+_FOCUS_STATUS_LABELS: dict[str, str] = {
+    "idea": "Идея",
+    "refined": "Детализирована",
+    "ready": "Готова к работе",
+    "ready_for_dev": "Готова к разработке",
+    "in_progress": "В работе",
+    "review": "На ревью",
+    "done": "Готово",
+    "blocked": "Заблокирована",
+    "cancelled": "Отменена",
+}
 
 
 def get_status_chat_id() -> str | None:
@@ -327,14 +361,80 @@ def format_supervisor_execution_result(result: dict, debug: bool = False) -> str
     return _format_result_human(result)
 
 
-def format_focus(focus: dict) -> str:
-    return (
-        "Текущий фокус:\n"
-        f"- task: {focus.get('active_task_id')}\n"
-        f"- release: {focus.get('active_release_id')}\n"
-        f"- decision: {focus.get('active_decision_id')}\n"
-        f"- summary: {focus.get('summary')}"
-    )
+def format_focus(focus: dict, task: "dict | None" = None) -> str:
+    """Clean human-readable focus summary for /focus and focus-related commands.
+
+    Args:
+        focus: dict returned by ``get_focus()``.
+        task:  optional pre-loaded task dict (avoids an extra DB call from callers
+               that have already loaded the task).
+    """
+    task_id = focus.get("active_task_id")
+    release_id = focus.get("active_release_id")
+    decision_id = focus.get("active_decision_id")
+
+    if task_id:
+        if task is None:
+            task = orchestrator.get_task(task_id)
+        title = (task.get("title", "") if task else "")
+        status_raw = (task.get("status", "") if task else "")
+        status_label = _FOCUS_STATUS_LABELS.get(status_raw, status_raw)
+        lines = [f"🎯 Фокус: {task_id}"]
+        if title:
+            lines.append(f"Название: {title}")
+        if status_label:
+            lines.append(f"Статус: {status_label}")
+        lines.append("")
+        lines.append("Пиши сюда о задаче. Снять: /clear_focus")
+        return "\n".join(lines)
+
+    if release_id:
+        return f"🎯 Фокус: релиз {release_id}\n\nСнять: /clear_focus"
+
+    if decision_id:
+        return f"🎯 Фокус: решение {decision_id}\n\nСнять: /clear_focus"
+
+    return "Фокус не выбран."
+
+
+def format_focus_indicator(focus: dict, task: "dict | None" = None) -> str:
+    """Short one-line focus indicator for appending to other responses.
+
+    Returns an empty string when no focus is set.
+    """
+    task_id = focus.get("active_task_id")
+    if task_id:
+        if task is None:
+            task = orchestrator.get_task(task_id)
+        title = (task.get("title", "") if task else "")
+        if title:
+            return f"🎯 Фокус: {task_id} — {title}"
+        return f"🎯 Фокус: {task_id}"
+    release_id = focus.get("active_release_id")
+    if release_id:
+        return f"🎯 Фокус: {release_id}"
+    decision_id = focus.get("active_decision_id")
+    if decision_id:
+        return f"🎯 Фокус: {decision_id}"
+    return ""
+
+
+def _check_focus_switch(text: str) -> "str | None":
+    """Detect natural-language focus-switch requests and return the task/bug ID.
+
+    Matches messages like:
+      "возьми TASK-2 в фокус"
+      "переключись на TASK-5"
+      "фокус на BUG-3"
+
+    Returns the uppercased ID string, or None if not a focus-switch request.
+    """
+    norm = text.lower().strip()
+    has_indicator = any(kw in norm for kw in _FOCUS_SWITCH_KEYWORDS)
+    if not has_indicator:
+        return None
+    m = _TASK_ID_RE.search(text)
+    return m.group(1).upper() if m else None
 
 
 def _telegram_session(update: Any) -> tuple[str, str, str]:
@@ -392,6 +492,15 @@ async def _run_dry(
         }
 
     plan_text = format_supervisor_plan(plan, debug=is_debug_mode())
+
+    # Append focus indicator when there is an active focus and the plan is not
+    # a focus-management action itself (that would be redundant).
+    action_name_dry = (plan.get("action") or {}).get("name", "")
+    if action_name_dry not in _FOCUS_ACTIONS:
+        _dry_focus = get_focus(session_id, user_id=user_id, channel=channel)
+        _dry_indicator = format_focus_indicator(_dry_focus)
+        if _dry_indicator:
+            plan_text = plan_text + f"\n\n{_dry_indicator}"
 
     if plan.get("action"):
         try:
@@ -507,6 +616,15 @@ async def _run_execute(
             "Действие рискованное и требует подтверждения. Используйте /yes <запрос>.",
         )
         return
+
+    action_name = (plan.get("action") or {}).get("name", "")
+
+    # Capture pre-execution focus so we can restore it after create_task/create_bug.
+    # supervisor.execute_supervisor_action shifts focus to the newly created item,
+    # but we want to keep the user's existing focus intact.
+    pre_focus = get_focus(session_id, user_id=user_id, channel=channel)
+    pre_task_id = pre_focus.get("active_task_id")
+
     try:
         result = execute_supervisor_action(
             plan,
@@ -518,13 +636,38 @@ async def _run_execute(
     except SupervisorError as exc:
         logging.exception("SupervisorError in _run_execute (execution): %s", exc)
         await _reply(update, f"Ошибка выполнения: {exc}")
-        action_name = (plan.get("action") or {}).get("name", "?")
         await send_status_notification(
             context,
             f"❌ Ошибка при выполнении действия\nAction: {action_name}\nПричина: {exc}",
         )
         return
-    await _reply(update, format_supervisor_execution_result(result, debug=is_debug_mode()))
+
+    # Build reply text
+    reply_text = format_supervisor_execution_result(result, debug=is_debug_mode())
+
+    # Preserve pre-existing focus when a new task/bug was created.
+    # Append a short note so the user knows focus was not changed.
+    focus_note = ""
+    if action_name in {"create_task", "create_bug"} and pre_task_id:
+        try:
+            set_active_task(session_id, pre_task_id, user_id=user_id, channel=channel)
+            focus_note = f"\nТекущий фокус не менял: {pre_task_id}."
+        except Exception:
+            pass  # pre-focused task may have been removed; silently ignore
+
+    if focus_note:
+        reply_text = reply_text + focus_note
+
+    # Append short focus indicator for non-focus actions (where focus is still active).
+    if action_name not in _FOCUS_ACTIONS:
+        post_focus = get_focus(session_id, user_id=user_id, channel=channel)
+        post_task_id = post_focus.get("active_task_id")
+        post_task = orchestrator.get_task(post_task_id) if post_task_id else None
+        indicator = format_focus_indicator(post_focus, post_task)
+        if indicator:
+            reply_text = reply_text + f"\n\n{indicator}"
+
+    await _reply(update, reply_text)
     await _notify_action_result(context, plan, result)
 
 
@@ -546,6 +689,22 @@ async def handle_user_text(
         return
 
     session_id, user_id, channel = _telegram_session(update)
+
+    # Focus-switch detection: handle "возьми TASK-X в фокус", "переключись на TASK-X"
+    # before the fast router and before the supervisor so it never costs an LLM call.
+    focus_switch_id = _check_focus_switch(user_text)
+    if focus_switch_id:
+        try:
+            set_active_task(session_id, focus_switch_id, user_id=user_id, channel=channel)
+            task = orchestrator.get_task(focus_switch_id)
+            title = (task.get("title", "") if task else "")
+            reply = f"🎯 Фокус: {focus_switch_id}"
+            if title:
+                reply += f" — {title}"
+            await _reply(update, reply)
+        except Exception:
+            await _reply(update, f"Задача {focus_switch_id} не найдена.")
+        return
 
     # Fast router: handle simple read-only queries locally without calling the LLM.
     # The enabled-check lives here (not only inside try_route) so that disabling
@@ -591,6 +750,11 @@ async def start_handler(update: Any, context: Any) -> None:
     else:
         mode_text = "✅ Подключён к внешнему проекту."
 
+    session_id, user_id, channel = _telegram_session(update)
+    focus = get_focus(session_id, user_id=user_id, channel=channel)
+    focus_line = format_focus_indicator(focus)
+    focus_block = f"\n\n{focus_line}" if focus_line else ""
+
     text = (
         "👋 Project Manager Bot\n\n"
         f"{mode_text}\n\n"
@@ -600,6 +764,7 @@ async def start_handler(update: Any, context: Any) -> None:
         "• Что делать дальше?\n"
         "• Статус проекта\n\n"
         "Напиши мне что нужно сделать, или используй /help."
+        f"{focus_block}"
     )
 
     message = getattr(update, "message", None)
@@ -765,7 +930,18 @@ async def focus_handler(update: Any, context: Any) -> None:
         await _reply(update, "Access denied.")
         return
     session_id, user_id, channel = _telegram_session(update)
-    await _reply(update, format_focus(get_focus(session_id, user_id=user_id, channel=channel)))
+
+    # /focus TASK-X → set focus (same as /focus_task TASK-X)
+    task_id = _extract_text(context, update).strip().upper()
+    if task_id:
+        try:
+            set_active_task(session_id, task_id, user_id=user_id, channel=channel)
+        except Exception:
+            await _reply(update, f"Задача {task_id} не найдена.")
+            return
+
+    focus = get_focus(session_id, user_id=user_id, channel=channel)
+    await _reply(update, format_focus(focus))
 
 
 async def focus_task_handler(update: Any, context: Any) -> None:
@@ -778,7 +954,11 @@ async def focus_task_handler(update: Any, context: Any) -> None:
         await _reply(update, "Укажи ID задачи: /focus_task TASK-1")
         return
     session_id, user_id, channel = _telegram_session(update)
-    session = set_active_task(session_id, task_id, user_id=user_id, channel=channel)
+    try:
+        session = set_active_task(session_id, task_id, user_id=user_id, channel=channel)
+    except Exception:
+        await _reply(update, f"Задача {task_id} не найдена.")
+        return
     await _reply(update, format_focus(get_focus(session["session_id"], user_id=user_id, channel=channel)))
 
 
@@ -816,8 +996,17 @@ async def clear_focus_handler(update: Any, context: Any) -> None:
         await _reply(update, "Access denied.")
         return
     session_id, user_id, channel = _telegram_session(update)
+    pre_focus = get_focus(session_id, user_id=user_id, channel=channel)
+    had_focus = bool(
+        pre_focus.get("active_task_id")
+        or pre_focus.get("active_release_id")
+        or pre_focus.get("active_decision_id")
+    )
     clear_focus(session_id, user_id=user_id, channel=channel)
-    await _reply(update, format_focus(get_focus(session_id, user_id=user_id, channel=channel)))
+    if had_focus:
+        await _reply(update, "Фокус снят. Можно создавать новые задачи или выбрать другую.")
+    else:
+        await _reply(update, "Сейчас нет активного фокуса.")
 
 
 async def text_handler(update: Any, context: Any) -> None:
@@ -938,6 +1127,106 @@ async def cancel_callback(update: Any, context: Any) -> None:
     await query.edit_message_text("Действие отменено.")
 
 
+async def board_focus_callback(update: Any, context: Any) -> None:
+    """Inline-button handler: set focus on a Board task card (🎯 В фокус)."""
+    query = update.callback_query
+    await query.answer()
+    owner_id = (context.bot_data.get("telegram_config") or {}).get("owner_id", "")
+    if not is_owner(update, owner_id):
+        # Non-owner clicks are silently ignored — no edit to the public card
+        return
+
+    import telegram_board
+    parsed = telegram_board.parse_board_task_callback(query.data)
+    if not parsed:
+        return
+
+    task_id = parsed["task_id"]
+    session_id, user_id, channel = _telegram_session(update)
+    set_active_task(session_id, task_id, user_id=user_id, channel=channel)
+
+    # Send private DM to owner with confirmation and usage hint
+    try:
+        task = orchestrator.get_task(task_id)
+        title = (task.get("title", "") or "") if task else ""
+        status_raw = (task.get("status", "") if task else "")
+        status_label = _FOCUS_STATUS_LABELS.get(status_raw, status_raw)
+
+        dm_lines = [f"🎯 Фокус: {task_id}"]
+        if title:
+            dm_lines.append(f"Название: {title}")
+        if status_label:
+            dm_lines.append(f"Статус: {status_label}")
+        dm_lines.append("")
+        dm_lines.append("Пиши сюда, что нужно сделать по этой задаче. Чтобы снять фокус: /clear_focus")
+        await context.bot.send_message(chat_id=update.effective_user.id, text="\n".join(dm_lines))
+    except Exception:
+        logging.exception("board_focus_callback: failed to send DM for task %s", task_id)
+
+
+async def board_start_callback(update: Any, context: Any) -> None:
+    """Inline-button handler: start a ready_for_dev task (🚧 В работу)."""
+    query = update.callback_query
+    await query.answer()
+    owner_id = (context.bot_data.get("telegram_config") or {}).get("owner_id", "")
+    if not is_owner(update, owner_id):
+        return
+
+    import telegram_board
+    parsed = telegram_board.parse_board_task_callback(query.data)
+    if not parsed:
+        return
+
+    task_id = parsed["task_id"]
+
+    # Load, mutate, save
+    tasks = orchestrator.load_tasks()
+    task = next((t for t in tasks if t.get("id") == task_id), None)
+    if task is None:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=f"Задача {task_id} не найдена.",
+            )
+        except Exception:
+            pass
+        return
+
+    current_status = task.get("status", "")
+    if current_status == "in_progress":
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=f"Задача {task_id} уже в работе.",
+            )
+        except Exception:
+            pass
+        return
+
+    task["status"] = "in_progress"
+    orchestrator.save_tasks(tasks)
+
+    # Set focus
+    session_id, user_id, channel = _telegram_session(update)
+    set_active_task(session_id, task_id, user_id=user_id, channel=channel)
+
+    # Upsert board card (moves card from task_ready → task_active topic)
+    try:
+        await telegram_board.upsert_task_board_card(context.bot, task)
+    except Exception:
+        logging.exception("board_start_callback: failed to upsert board card for task %s", task_id)
+
+    # Send private DM to owner
+    title = (task.get("title", "") or "")
+    dm_text = f"🚧 Задача {task_id} взята в работу"
+    if title:
+        dm_text += f": {title}"
+    try:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=dm_text)
+    except Exception:
+        logging.exception("board_start_callback: failed to send DM for task %s", task_id)
+
+
 async def study_project_callback(update: Any, context: Any) -> None:
     query = update.callback_query
     await query.answer()
@@ -1040,6 +1329,8 @@ def build_application(config: dict) -> Any:
     app.add_handler(CallbackQueryHandler(confirm_callback, pattern="^confirm_pending_action$"))
     app.add_handler(CallbackQueryHandler(cancel_callback, pattern="^cancel_pending_action$"))
     app.add_handler(CallbackQueryHandler(study_project_callback, pattern="^study_project$"))
+    app.add_handler(CallbackQueryHandler(board_focus_callback, pattern=r"^board:task:focus:"))
+    app.add_handler(CallbackQueryHandler(board_start_callback, pattern=r"^board:task:start:"))
     app.add_error_handler(error_handler)
 
     return app

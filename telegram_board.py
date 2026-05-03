@@ -400,6 +400,95 @@ def format_decision_board_card(decision: dict) -> str:
     return "\n".join(lines)
 
 
+def format_task_tombstone(task: dict, new_topic_key: str) -> str:
+    """
+    Short Russian tombstone message left in the old topic when a task card is moved.
+
+    Example:
+        ➡️ TASK-12 перенесена
+
+        Актуальная карточка теперь находится в другом топике.
+        Новый статус: В работе
+
+    ``new_topic_key`` is kept as a parameter for future use (e.g. linking to the new topic)
+    but the current format shows the task's human-readable status label instead of the
+    raw topic key so the tombstone stays readable without Telegram context.
+    """
+    task_id = task.get("id", "")
+    status_raw = task.get("status", "")
+    status_label = _TASK_STATUS_LABELS.get(status_raw, status_raw)
+
+    lines = [f"➡️ {task_id} перенесена", ""]
+    lines.append("Актуальная карточка теперь находится в другом топике.")
+    if status_label:
+        lines.append(f"Новый статус: {status_label}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Inline keyboard helpers for task board cards
+# ---------------------------------------------------------------------------
+
+def parse_board_task_callback(data: str) -> "dict | None":
+    """
+    Parse a board task callback data string.
+
+    Expected format:  ``board:task:{action}:{task_id}``
+    Known actions:    ``focus``, ``start``
+
+    Returns ``{"action": str, "task_id": str}`` or ``None`` if format is invalid.
+    """
+    if not data or not data.startswith("board:task:"):
+        return None
+    parts = data.split(":", 3)
+    if len(parts) != 4:
+        return None
+    _, _, action, task_id = parts
+    if not action or not task_id:
+        return None
+    return {"action": action, "task_id": task_id}
+
+
+def build_task_card_keyboard(task: dict) -> "list[tuple[str, str]]":
+    """
+    Return inline button specs for a task board card.
+
+    Returns a list of ``(label, callback_data)`` tuples.  Buttons by status:
+
+    * ``ready_for_dev``:  ``[("🚧 В работу", "board:task:start:{id}"),
+                             ("🎯 В фокус",   "board:task:focus:{id}")]``
+    * all other statuses: ``[("🎯 В фокус",   "board:task:focus:{id}")]``
+
+    Returns an empty list when the task has no ``id``.
+    """
+    task_id = task.get("id", "")
+    if not task_id:
+        return []
+    status = (task.get("status") or "").strip()
+    buttons: list[tuple[str, str]] = []
+    if status == "ready_for_dev":
+        buttons.append(("🚧 В работу", f"board:task:start:{task_id}"))
+    buttons.append(("🎯 В фокус", f"board:task:focus:{task_id}"))
+    return buttons
+
+
+def make_inline_keyboard(buttons: "list[tuple[str, str]]") -> "Optional[object]":
+    """
+    Build an ``InlineKeyboardMarkup`` from ``(label, callback_data)`` pairs.
+
+    All buttons are placed in a single row.
+    Returns ``None`` when *buttons* is empty or the ``telegram`` package is unavailable.
+    """
+    if not buttons:
+        return None
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError:
+        return None
+    row = [InlineKeyboardButton(label, callback_data=data) for label, data in buttons]
+    return InlineKeyboardMarkup([row])
+
+
 def format_agent_log_card(event: dict) -> str:
     """
     Format an agent event as a human-readable log card (Russian).
@@ -473,6 +562,19 @@ _TOPIC_LABELS: dict[str, str] = {
 def is_board_enabled() -> bool:
     """Return True when TELEGRAM_BOARD_ENABLED is a truthy value."""
     return _parse_bool(os.getenv("TELEGRAM_BOARD_ENABLED"), default=False)
+
+
+def is_archive_on_move_enabled() -> bool:
+    """Return True when old card should be replaced with a tombstone on topic move.
+
+    Controlled by TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE (default: true).
+    Set to false to silently create a new card without editing the old one.
+    Empty string is treated the same as unset (returns the default True).
+    """
+    raw = (os.getenv("TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE") or "").strip()
+    if not raw:
+        return True  # default: archive on move
+    return _parse_bool(raw, default=True)
 
 
 def get_board_chat_id() -> Optional[str]:
@@ -721,6 +823,239 @@ async def ping_board_topics(
                 })
 
     return results
+
+
+async def upsert_task_board_card(
+    bot: object,
+    task: dict,
+    *,
+    force_new: bool = False,
+) -> dict:
+    """Create or update a task card on the Telegram Board (topic-aware upsert).
+
+    Returns a result dict:
+    {
+        "status":     "created" | "updated" | "recreated" | "moved" |
+                      "moved_archive_failed" | "timeout" | "error" | "skipped",
+        "task_id":    str,
+        "topic_key":  str,           # desired topic key
+        "message_id": int | None,
+        "reason":     str | None,
+        "prev_topic_key": str | None,  # set when status is "moved"/"moved_archive_failed"
+    }
+
+    Statuses:
+    - created              — new message sent, mapping saved
+    - updated              — existing message edited in-place, mapping updated
+    - recreated            — existing message was deleted; new message sent, mapping updated
+    - moved                — task moved to a new topic; new card created, old card archived (tombstone)
+    - moved_archive_failed — task moved, new card created, but tombstone edit on old card failed
+    - timeout              — Telegram did not respond in time (warning, not a hard crash)
+    - error                — hard Telegram/network failure
+    - skipped              — board disabled / chat id missing / topic not configured
+
+    Does not raise.  Never prints token or absolute paths.
+    Topic-move archiving is controlled by TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE (default: true).
+    """
+    import telegram_message_links
+
+    task_id: str = task.get("id", "")
+    topic_key: str = topic_key_for_task(task)
+    card_text: str = format_task_board_card(task)
+    card_keyboard: object = make_inline_keyboard(build_task_card_keyboard(task))
+
+    def _result(
+        status: str,
+        message_id: "Optional[int]" = None,
+        reason: "Optional[str]" = None,
+        prev_topic_key: "Optional[str]" = None,
+    ) -> dict:
+        return {
+            "status": status,
+            "task_id": task_id,
+            "topic_key": topic_key,
+            "message_id": message_id,
+            "reason": reason,
+            "prev_topic_key": prev_topic_key,
+        }
+
+    if not is_board_enabled():
+        return _result("skipped", reason="Board disabled (TELEGRAM_BOARD_ENABLED=false)")
+
+    board_chat_id = get_board_chat_id()
+    if not board_chat_id:
+        return _result("skipped", reason="TELEGRAM_BOARD_CHAT_ID not set")
+
+    topic_id = get_topic_id(topic_key)
+    if topic_id is None:
+        env_var = _TOPIC_KEY_ENV.get(topic_key, "")
+        return _result("skipped", reason=f"Topic {topic_key!r} not configured ({env_var} not set)")
+
+    timeout_sec = get_send_timeout()
+
+    # --- Look up existing Board card ---
+    existing_link = None if force_new else telegram_message_links.find_board_link("task", task_id)
+
+    # --- MOVE path: topic changed ---
+    if existing_link and existing_link.get("topic_key") != topic_key:
+        prev_topic_key: str = existing_link["topic_key"]
+        old_message_id: int = existing_link["telegram_message_id"]
+        old_thread_id: "Optional[int]" = existing_link.get("message_thread_id")
+
+        logging.info(
+            "telegram_board: task %r topic changed %r -> %r, moving card",
+            task_id, prev_topic_key, topic_key,
+        )
+
+        # 1. Send new card in the new topic (must succeed; if it fails, abort)
+        try:
+            _send_kwargs: dict = {
+                "chat_id": board_chat_id,
+                "message_thread_id": topic_id,
+                "text": card_text,
+                "read_timeout": timeout_sec,
+                "write_timeout": timeout_sec,
+                "connect_timeout": timeout_sec,
+            }
+            if card_keyboard is not None:
+                _send_kwargs["reply_markup"] = card_keyboard
+            new_msg = await bot.send_message(**_send_kwargs)  # type: ignore[union-attr]
+        except Exception as send_exc:
+            short = str(send_exc)[:200]
+            if _is_timeout_exception(send_exc):
+                logging.warning("telegram_board: send timeout during move for task %r: %s", task_id, short)
+                return _result("timeout", reason=short, prev_topic_key=prev_topic_key)
+            logging.warning("telegram_board: send failed during move for task %r: %s", task_id, short)
+            return _result("error", reason=short, prev_topic_key=prev_topic_key)
+
+        new_message_id = getattr(new_msg, "message_id", None)
+
+        # 2. Update mapping to new topic/message
+        if new_message_id is not None:
+            telegram_message_links.upsert_board_link(
+                chat_id=board_chat_id,
+                message_id=new_message_id,
+                work_item_type="task",
+                work_item_id=task_id,
+                message_thread_id=topic_id,
+                topic_key=topic_key,
+            )
+
+        # 3. Archive old card with tombstone (best-effort)
+        if is_archive_on_move_enabled():
+            tombstone = format_task_tombstone(task, topic_key)
+            try:
+                await bot.edit_message_text(  # type: ignore[union-attr]
+                    chat_id=board_chat_id,
+                    message_id=old_message_id,
+                    text=tombstone,
+                    read_timeout=timeout_sec,
+                    write_timeout=timeout_sec,
+                    connect_timeout=timeout_sec,
+                )
+                return _result("moved", message_id=new_message_id, prev_topic_key=prev_topic_key)
+            except Exception as tomb_exc:
+                short = str(tomb_exc)[:200]
+                logging.warning(
+                    "telegram_board: tombstone edit failed for old message %s of task %r: %s",
+                    old_message_id, task_id, short,
+                )
+                return _result(
+                    "moved_archive_failed",
+                    message_id=new_message_id,
+                    reason=short,
+                    prev_topic_key=prev_topic_key,
+                )
+        else:
+            # Archive disabled — just move silently
+            return _result("moved", message_id=new_message_id, prev_topic_key=prev_topic_key)
+
+    # --- SAME-TOPIC path: edit existing card ---
+    if existing_link:
+        existing_message_id: int = existing_link["telegram_message_id"]
+        try:
+            _edit_kwargs: dict = {
+                "chat_id": board_chat_id,
+                "message_id": existing_message_id,
+                "text": card_text,
+                "read_timeout": timeout_sec,
+                "write_timeout": timeout_sec,
+                "connect_timeout": timeout_sec,
+            }
+            if card_keyboard is not None:
+                _edit_kwargs["reply_markup"] = card_keyboard
+            await bot.edit_message_text(**_edit_kwargs)  # type: ignore[union-attr]
+            telegram_message_links.upsert_board_link(
+                chat_id=board_chat_id,
+                message_id=existing_message_id,
+                work_item_type="task",
+                work_item_id=task_id,
+                message_thread_id=existing_link.get("message_thread_id"),
+                topic_key=topic_key,
+            )
+            return _result("updated", message_id=existing_message_id)
+        except Exception as edit_exc:
+            short = str(edit_exc)[:200]
+            if _is_timeout_exception(edit_exc):
+                logging.warning("telegram_board: edit timeout for task %r: %s", task_id, short)
+                return _result("timeout", reason=short)
+            # Message deleted / inaccessible — fall through to recreate
+            low = short.lower()
+            if any(kw in low for kw in (
+                "message to edit not found",
+                "message_id_invalid",
+                "message can't be edited",
+                "message not found",
+                "bad request",
+            )):
+                logging.warning(
+                    "telegram_board: existing message %s gone, will recreate for task %r",
+                    existing_message_id, task_id,
+                )
+                existing_link = None  # signal to recreate below
+            else:
+                logging.warning("telegram_board: edit failed for task %r: %s", task_id, short)
+                return _result("error", reason=short)
+
+    # --- CREATE / RECREATE path ---
+    action = (
+        "recreated"
+        if (existing_link is None and not force_new
+            and telegram_message_links.find_board_link("task", task_id))
+        else "created"
+    )
+    try:
+        _create_kwargs: dict = {
+            "chat_id": board_chat_id,
+            "message_thread_id": topic_id,
+            "text": card_text,
+            "read_timeout": timeout_sec,
+            "write_timeout": timeout_sec,
+            "connect_timeout": timeout_sec,
+        }
+        if card_keyboard is not None:
+            _create_kwargs["reply_markup"] = card_keyboard
+        msg = await bot.send_message(**_create_kwargs)  # type: ignore[union-attr]
+    except Exception as send_exc:
+        short = str(send_exc)[:200]
+        if _is_timeout_exception(send_exc):
+            logging.warning("telegram_board: send timeout for task %r: %s", task_id, short)
+            return _result("timeout", reason=short)
+        logging.warning("telegram_board: send failed for task %r: %s", task_id, short)
+        return _result("error", reason=short)
+
+    new_message_id = getattr(msg, "message_id", None)
+    if new_message_id is not None:
+        telegram_message_links.upsert_board_link(
+            chat_id=board_chat_id,
+            message_id=new_message_id,
+            work_item_type="task",
+            work_item_id=task_id,
+            message_thread_id=topic_id,
+            topic_key=topic_key,
+        )
+
+    return _result(action, message_id=new_message_id)
 
 
 def format_ping_results(results: list[dict]) -> str:

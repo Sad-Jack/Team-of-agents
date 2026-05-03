@@ -256,6 +256,8 @@ Forum-группа используется как проектная доска
 |---|---|
 | `TELEGRAM_BOARD_ENABLED` | `true` чтобы включить. По умолчанию `false`. |
 | `TELEGRAM_BOARD_CHAT_ID` | ID форум-группы (отрицательное число). |
+| `TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS` | Таймаут отправки (секунды). По умолчанию `20`. |
+| `TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE` | При смене топика заменять старую карточку надгробием. По умолчанию `true`. |
 | `TELEGRAM_TOPIC_TASK_IDEAS` | message_thread_id топика "Task Ideas" |
 | `TELEGRAM_TOPIC_TASK_READY` | message_thread_id топика "Task Ready" |
 | `TELEGRAM_TOPIC_TASK_ACTIVE` | message_thread_id топика "Task Active" |
@@ -330,6 +332,72 @@ Telegram Board ping result:
 `task_ideas` · `task_ready` · `task_active` · `task_blocked` · `bugs_new` ·
 `bugs_active` · `needs_input` · `releases` · `agent_log` · `decisions`
 
+### Публикация карточки задачи (board-post-task)
+
+Команда создаёт или обновляет карточку конкретной задачи в нужном топике Board.
+
+```bash
+# Превью без отправки:
+python3 run.py board-post-task TASK-1 --dry-run
+
+# Создать или обновить карточку:
+python3 run.py board-post-task TASK-1
+
+# Всегда создавать новое сообщение:
+python3 run.py board-post-task TASK-1 --force-new
+```
+
+Dry-run показывает режим (create / update / move / force-new) и превью карточки без вызова API.
+
+#### Upsert-логика
+
+| Ситуация | Действие | Статус |
+|---|---|---|
+| Нет существующего mapping → | `send_message` → сохранить mapping | `created` |
+| Mapping есть, топик тот же → | `edit_message_text` | `updated` |
+| Mapping есть, топик изменился → | создать в новом топике + архивировать старую | `moved` |
+| Редактирование старой не удалось → | новая карточка уже есть | `moved_archive_failed` |
+| Сообщение было удалено → | пересоздать в том же топике | `recreated` |
+| `--force-new` → | всегда `send_message` | `created` |
+
+#### Перенос карточки между топиками
+
+Telegram не умеет перемещать сообщения между топиками.  
+При смене статуса задачи (например `idea` → `in_progress`) бот:
+
+1. Отправляет новую карточку в правильный топик.
+2. Заменяет старую карточку коротким надгробным сообщением (если `TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE=true`):
+
+```
+➡️ TASK-1 перенесена
+
+Актуальная карточка теперь находится в другом топике.
+Новый статус: В работе
+```
+
+Если архивирование отключено (`TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE=false`) — старая карточка остаётся без изменений, новая создаётся в нужном топике.
+
+Если архивирование включено, но редактирование старой карточки не удалось (сообщение удалено, нет доступа) — операция всё равно успешна (`moved_archive_failed`), новая карточка уже создана.
+
+#### Маршрутизация статусов → топики
+
+| Статус задачи | Топик Board |
+|---|---|
+| `idea`, `refined` | Task Ideas |
+| `ready_for_dev` | Task Ready |
+| `in_progress`, `review`, `done` | Task Active |
+| `blocked` | Task Blocked |
+| остальные | Task Ideas (fallback) |
+
+#### Хранение mapping
+
+Связи `task_id → (chat_id, message_id, topic_key)` хранятся в:
+```
+sessions/telegram_message_links.json
+```
+
+Файл не содержит секретов.
+
 **Разница между командами:**
 
 | Команда | Назначение | Показывает topic id? |
@@ -338,6 +406,8 @@ Telegram Board ping result:
 | `python3 run.py board-ping --dry-run` | Smoke-test план без API | ✅ да |
 | `python3 run.py board-ping` | Реальный smoke-test | — результат |
 | `python3 run.py board-ping --topic KEY` | Smoke-test одного топика | — результат |
+| `python3 run.py board-post-task TASK-1 --dry-run` | Превью карточки | — режим + preview |
+| `python3 run.py board-post-task TASK-1` | Upsert карточки | — статус |
 | `python3 run.py telegram-config` | Общий Telegram-конфиг (CI) | ❌ только `_SET` |
 
 Подробнее об архитектуре Board: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)
@@ -347,9 +417,11 @@ Telegram Board ping result:
 ## Диагностика
 
 ```bash
-python3 run.py board-config           # детальная диагностика Telegram Board
-python3 run.py board-ping --dry-run   # smoke-test план (без API)
-python3 run.py telegram-config        # общий Telegram-конфиг (только _SET флаги)
-python3 run.py doctor                 # полная диагностика системы
-python3 run.py config                 # конфиг LLM-провайдера
+python3 run.py board-config                     # детальная диагностика Telegram Board
+python3 run.py board-ping --dry-run             # smoke-test план (без API)
+python3 run.py board-post-task TASK-1 --dry-run # превью карточки (без API)
+python3 run.py board-post-task TASK-1           # создать/обновить карточку задачи
+python3 run.py telegram-config                  # общий Telegram-конфиг (только _SET флаги)
+python3 run.py doctor                           # полная диагностика системы
+python3 run.py config                           # конфиг LLM-провайдера
 ```

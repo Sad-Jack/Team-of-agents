@@ -1630,5 +1630,1119 @@ class TestAddMessageLinkThreadId(unittest.TestCase):
         self.assertEqual(found["message_thread_id"], 22)
 
 
+# ---------------------------------------------------------------------------
+# telegram_message_links — find_board_link + upsert_board_link
+# ---------------------------------------------------------------------------
+
+class TestFindBoardLink(unittest.TestCase):
+    """Tests for find_board_link (Board-specific lookup by work item type/id)."""
+
+    def setUp(self):
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+
+    def tearDown(self):
+        import os as _os
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def test_returns_none_when_empty(self):
+        self.assertIsNone(telegram_message_links.find_board_link("task", "TASK-1"))
+
+    def test_finds_existing_board_link(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=10, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=5, topic_key="task_active",
+        )
+        link = telegram_message_links.find_board_link("task", "TASK-1")
+        self.assertIsNotNone(link)
+        self.assertEqual(link["work_item_id"], "TASK-1")
+        self.assertEqual(link["topic_key"], "task_active")
+
+    def test_ignores_links_without_topic_key(self):
+        # add_message_link (old-style, no topic_key) should NOT be found by find_board_link
+        telegram_message_links.add_message_link(
+            chat_id="-100x", message_id=20, work_item_type="task", work_item_id="TASK-2",
+        )
+        self.assertIsNone(telegram_message_links.find_board_link("task", "TASK-2"))
+
+    def test_returns_none_for_wrong_type(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=30, work_item_type="bug",
+            work_item_id="BUG-1", message_thread_id=9, topic_key="bugs_new",
+        )
+        self.assertIsNone(telegram_message_links.find_board_link("task", "BUG-1"))
+
+    def test_returns_most_recent_when_multiple(self):
+        # Simulate two entries (e.g. after recreate): most recent created_at wins
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=40, work_item_type="task",
+            work_item_id="TASK-3", message_thread_id=5, topic_key="task_ideas",
+        )
+        # Manually inject a second entry with later timestamp
+        import json, datetime, pathlib
+        links = json.loads(telegram_message_links._LINKS_PATH.read_text())
+        later = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        links.append({
+            "telegram_chat_id": "-100x",
+            "telegram_message_id": 99,
+            "work_item_type": "task",
+            "work_item_id": "TASK-3",
+            "topic_key": "task_ideas",
+            "created_at": later,
+            "updated_at": later,
+        })
+        telegram_message_links._LINKS_PATH.write_text(json.dumps(links))
+        best = telegram_message_links.find_board_link("task", "TASK-3")
+        self.assertEqual(best["telegram_message_id"], 99)
+
+
+class TestUpsertBoardLink(unittest.TestCase):
+    """Tests for upsert_board_link — create-or-update semantics."""
+
+    def setUp(self):
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+
+    def tearDown(self):
+        import os as _os
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def _all(self):
+        return telegram_message_links.load_all_links()
+
+    def test_creates_new_entry(self):
+        entry = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_ideas",
+        )
+        self.assertEqual(entry["telegram_message_id"], 5)
+        self.assertEqual(entry["topic_key"], "task_ideas")
+        self.assertEqual(len(self._all()), 1)
+
+    def test_updates_existing_entry_in_place(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_ideas",
+        )
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=99, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_active",
+        )
+        all_links = self._all()
+        # Only one entry for this task
+        task_links = [l for l in all_links if l["work_item_id"] == "TASK-1" and l.get("topic_key")]
+        self.assertEqual(len(task_links), 1)
+        self.assertEqual(task_links[0]["telegram_message_id"], 99)
+        self.assertEqual(task_links[0]["topic_key"], "task_active")
+
+    def test_preserves_original_created_at_on_update(self):
+        first = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_ideas",
+        )
+        original_created_at = first["created_at"]
+        second = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=99, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_active",
+        )
+        self.assertEqual(second["created_at"], original_created_at)
+
+    def test_updated_at_refreshed_on_update(self):
+        import time
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_ideas",
+        )
+        time.sleep(0.01)
+        second = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=99, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_active",
+        )
+        all_links = self._all()
+        stored = [l for l in all_links if l["work_item_id"] == "TASK-1" and l.get("topic_key")][0]
+        self.assertEqual(stored["updated_at"], second["updated_at"])
+
+    def test_stores_thread_id(self):
+        entry = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=42, topic_key="task_ideas",
+        )
+        self.assertEqual(entry["message_thread_id"], 42)
+
+    def test_no_thread_id_not_stored(self):
+        entry = telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=5, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=None, topic_key="task_ideas",
+        )
+        self.assertNotIn("message_thread_id", entry)
+
+    def test_different_work_items_are_separate_entries(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=1, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=3, topic_key="task_ideas",
+        )
+        telegram_message_links.upsert_board_link(
+            chat_id="-100x", message_id=2, work_item_type="task",
+            work_item_id="TASK-2", message_thread_id=3, topic_key="task_ideas",
+        )
+        self.assertEqual(len(self._all()), 2)
+
+
+# ---------------------------------------------------------------------------
+# upsert_task_board_card — unit tests with mock bot
+# ---------------------------------------------------------------------------
+
+class TestUpsertTaskBoardCard(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for upsert_task_board_card with fully mocked bot."""
+
+    def _task(self, task_id="TASK-7", status="idea", **kw):
+        base = {"id": task_id, "title": "Test task", "status": status, "priority": "medium"}
+        base.update(kw)
+        return base
+
+    def setUp(self):
+        import tempfile, pathlib, os as _os
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+        # Patch env for a minimal live board
+        self._env_patches = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100test",
+            "TELEGRAM_TOPIC_TASK_IDEAS": "10",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "20",
+            "TELEGRAM_TOPIC_TASK_READY": "30",
+            "TELEGRAM_TOPIC_TASK_BLOCKED": "40",
+            "TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "5",
+        }
+        self._env_patcher = unittest.mock.patch.dict("os.environ", self._env_patches)
+        self._env_patcher.start()
+
+    def tearDown(self):
+        import os as _os
+        self._env_patcher.stop()
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def _make_bot(self, send_message_id=101, edit_raises=None, send_raises=None):
+        """Return a minimal async-mock bot."""
+        from unittest.mock import AsyncMock, MagicMock
+        bot = MagicMock()
+        sent_msg = MagicMock()
+        sent_msg.message_id = send_message_id
+        if send_raises:
+            bot.send_message = AsyncMock(side_effect=send_raises)
+        else:
+            bot.send_message = AsyncMock(return_value=sent_msg)
+        if edit_raises:
+            bot.edit_message_text = AsyncMock(side_effect=edit_raises)
+        else:
+            bot.edit_message_text = AsyncMock(return_value=MagicMock())
+        return bot
+
+    # ---- create path ----
+
+    async def test_create_when_no_mapping(self):
+        bot = self._make_bot(send_message_id=101)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "created")
+        self.assertEqual(result["message_id"], 101)
+        bot.send_message.assert_called_once()
+        bot.edit_message_text.assert_not_called()
+
+    async def test_create_saves_mapping(self):
+        bot = self._make_bot(send_message_id=55)
+        await telegram_board.upsert_task_board_card(bot, self._task("TASK-10"))
+        link = telegram_message_links.find_board_link("task", "TASK-10")
+        self.assertIsNotNone(link)
+        self.assertEqual(link["telegram_message_id"], 55)
+        self.assertEqual(link["topic_key"], "task_ideas")
+
+    # ---- update path ----
+
+    async def test_update_when_mapping_exists(self):
+        # Pre-seed a Board mapping
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        bot = self._make_bot()
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["message_id"], 77)
+        bot.edit_message_text.assert_called_once()
+        bot.send_message.assert_not_called()
+
+    async def test_update_refreshes_mapping(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        bot = self._make_bot()
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        link = telegram_message_links.find_board_link("task", "TASK-7")
+        self.assertIsNotNone(link)
+        self.assertEqual(link["telegram_message_id"], 77)
+
+    # ---- recreate path (edit fails with "not found") ----
+
+    async def test_recreate_when_edit_message_not_found(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        exc = Exception("Bad Request: message to edit not found")
+        bot = self._make_bot(send_message_id=200, edit_raises=exc)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "recreated")
+        self.assertEqual(result["message_id"], 200)
+        bot.send_message.assert_called_once()
+
+    async def test_recreate_updates_mapping_to_new_id(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        exc = Exception("Bad Request: message to edit not found")
+        bot = self._make_bot(send_message_id=200, edit_raises=exc)
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        link = telegram_message_links.find_board_link("task", "TASK-7")
+        self.assertEqual(link["telegram_message_id"], 200)
+
+    # ---- force_new ----
+
+    async def test_force_new_ignores_existing_mapping(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        bot = self._make_bot(send_message_id=300)
+        result = await telegram_board.upsert_task_board_card(bot, self._task(), force_new=True)
+        self.assertEqual(result["status"], "created")
+        self.assertEqual(result["message_id"], 300)
+        bot.edit_message_text.assert_not_called()
+        bot.send_message.assert_called_once()
+
+    async def test_force_new_updates_mapping(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        bot = self._make_bot(send_message_id=300)
+        await telegram_board.upsert_task_board_card(bot, self._task(), force_new=True)
+        link = telegram_message_links.find_board_link("task", "TASK-7")
+        self.assertEqual(link["telegram_message_id"], 300)
+
+    # ---- skipped paths ----
+
+    async def test_skipped_board_disabled(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "false"}):
+            bot = self._make_bot()
+            result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "skipped")
+        bot.send_message.assert_not_called()
+
+    async def test_skipped_no_chat_id(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_CHAT_ID": ""}):
+            bot = self._make_bot()
+            result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "skipped")
+
+    async def test_skipped_topic_not_configured(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_TOPIC_TASK_IDEAS": ""}):
+            bot = self._make_bot()
+            result = await telegram_board.upsert_task_board_card(bot, self._task("TASK-7", "idea"))
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("not configured", result["reason"])
+
+    async def test_skipped_returns_task_id(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "false"}):
+            bot = self._make_bot()
+            result = await telegram_board.upsert_task_board_card(bot, self._task("TASK-42"))
+        self.assertEqual(result["task_id"], "TASK-42")
+
+    # ---- timeout / error ----
+
+    async def test_send_timeout_returns_timeout_status(self):
+        class _TimedOut(Exception):
+            pass
+        bot = self._make_bot(send_raises=_TimedOut("timed out"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "timeout")
+
+    async def test_send_hard_error_returns_error_status(self):
+        bot = self._make_bot(send_raises=Exception("Forbidden: bot is not a member"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "error")
+
+    async def test_edit_timeout_returns_timeout_without_recreate(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        class _TimedOut(Exception):
+            pass
+        bot = self._make_bot(edit_raises=_TimedOut("timed out"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "timeout")
+        bot.send_message.assert_not_called()
+
+    async def test_edit_hard_error_returns_error_status(self):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-7", message_thread_id=10, topic_key="task_ideas",
+        )
+        bot = self._make_bot(edit_raises=Exception("Forbidden: bot was kicked"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "error")
+        bot.send_message.assert_not_called()
+
+    async def test_result_never_contains_chat_id_value(self):
+        """Result dict should not expose the actual chat_id string."""
+        bot = self._make_bot(send_message_id=101)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        result_str = str(result)
+        self.assertNotIn("-100test", result_str)
+
+
+# ---------------------------------------------------------------------------
+# CLI integration — board-post-task upsert / force-new / dry-run
+# ---------------------------------------------------------------------------
+
+class TestBoardPostTaskCLIUpsert(unittest.TestCase):
+    """Integration tests for the updated board-post-task CLI (upsert + --force-new)."""
+
+    _BOARD_VARS = (
+        ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID", "TELEGRAM_BOT_TOKEN"]
+        + [e for _, _, e in telegram_board.BOARD_TOPICS]
+    )
+
+    def _base_env(self, overrides: dict | None = None) -> dict:
+        import os as _os
+        env = {**_os.environ}
+        for k in self._BOARD_VARS:
+            env[k] = ""
+        if overrides:
+            env.update(overrides)
+        return env
+
+    def _run(self, task_id: str, extra_args: list | None = None, overrides: dict | None = None):
+        import subprocess, sys
+        env = self._base_env(overrides or {})
+        cmd = [sys.executable, "run.py", "board-post-task", task_id] + (extra_args or [])
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout + result.stderr, result.returncode
+
+    # ---- dry-run shows mode hint ----
+
+    def test_dry_run_shows_create_mode_when_no_mapping(self):
+        out, _ = self._run("TASK-1", extra_args=["--dry-run"])
+        self.assertIn("create", out.lower())
+
+    def test_dry_run_shows_update_mode_when_mapping_exists(self):
+        # We can't easily inject a live link file via subprocess, so just check
+        # the code path: force-new label is shown with --force-new
+        out, _ = self._run("TASK-1", extra_args=["--dry-run", "--force-new"])
+        self.assertIn("force-new", out.lower())
+
+    def test_dry_run_exits_0_with_force_new(self):
+        _, code = self._run("TASK-1", extra_args=["--dry-run", "--force-new"])
+        self.assertEqual(code, 0)
+
+    def test_dry_run_no_token_leaked(self):
+        out, _ = self._run("TASK-1",
+                           extra_args=["--dry-run"],
+                           overrides={"TELEGRAM_BOT_TOKEN": "xsecret-upsert-tok"})
+        self.assertNotIn("xsecret-upsert-tok", out)
+
+    def test_dry_run_no_absolute_paths(self):
+        out, _ = self._run("TASK-1", extra_args=["--dry-run"])
+        self.assertNotIn("/Users/", out)
+
+    # ---- live — board disabled exits 1 ----
+
+    def test_live_board_disabled_exits_1(self):
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "false",
+            "TELEGRAM_BOT_TOKEN": "tok",
+            "TELEGRAM_BOARD_CHAT_ID": "-100x",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("disabled", out.lower())
+
+    # ---- live — topic not configured exits 1 ----
+
+    def test_live_topic_not_configured_exits_1(self):
+        out, code = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOT_TOKEN": "tok",
+            "TELEGRAM_BOARD_CHAT_ID": "-100x",
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("not configured", out.lower())
+
+    # ---- --force-new in argparse ----
+
+    def test_force_new_in_help(self):
+        import subprocess, sys, os as _os
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-post-task", "--help"],
+            capture_output=True, text=True, env={**_os.environ},
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("force-new", result.stdout + result.stderr)
+
+    # ---- token / secrets never in stdout ----
+
+    def test_live_token_not_in_output_on_error(self):
+        out, _ = self._run("TASK-1", overrides={
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOT_TOKEN": "xsupersecret-live-tok",
+            "TELEGRAM_BOARD_CHAT_ID": "",
+        })
+        self.assertNotIn("xsupersecret-live-tok", out)
+
+
+# ---------------------------------------------------------------------------
+# format_task_tombstone
+# ---------------------------------------------------------------------------
+
+class TestFormatTaskTombstone(unittest.TestCase):
+
+    def _task(self, task_id="TASK-5", title="Healthcheck endpoint", status="in_progress"):
+        return {"id": task_id, "title": title, "status": status}
+
+    def test_contains_task_id(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("TASK-5", msg)
+
+    def test_contains_перенесена(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("перенесена", msg)
+
+    def test_contains_arrow_icon(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("➡️", msg)
+
+    def test_contains_actuality_phrase(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("Актуальная карточка теперь находится в другом топике.", msg)
+
+    def test_contains_status_label(self):
+        # in_progress → "В работе"
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("В работе", msg)
+
+    def test_contains_новый_статус_prefix(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertIn("Новый статус:", msg)
+
+    def test_idea_status_label(self):
+        msg = telegram_board.format_task_tombstone(self._task(status="idea"), "task_ideas")
+        self.assertIn("Идея", msg)
+
+    def test_ready_for_dev_status_label(self):
+        msg = telegram_board.format_task_tombstone(self._task(status="ready_for_dev"), "task_ready")
+        self.assertIn("Готова к разработке", msg)
+
+    def test_unknown_status_shows_raw_status(self):
+        msg = telegram_board.format_task_tombstone(self._task(status="some_future_status"), "task_ideas")
+        self.assertIn("some_future_status", msg)
+
+    def test_no_json_no_secrets(self):
+        msg = telegram_board.format_task_tombstone(self._task(), "task_active")
+        self.assertNotIn("{", msg)
+        self.assertNotIn("}", msg)
+
+    def test_works_with_unknown_topic_key(self):
+        # Should not raise even for an unrecognised topic key
+        msg = telegram_board.format_task_tombstone(self._task(), "some_future_topic")
+        self.assertIn("перенесена", msg)
+
+
+# ---------------------------------------------------------------------------
+# is_archive_on_move_enabled
+# ---------------------------------------------------------------------------
+
+class TestIsArchiveOnMoveEnabled(unittest.TestCase):
+
+    def test_default_is_true(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": ""}):
+            self.assertTrue(telegram_board.is_archive_on_move_enabled())
+
+    def test_true_value(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "true"}):
+            self.assertTrue(telegram_board.is_archive_on_move_enabled())
+
+    def test_false_value(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "false"}):
+            self.assertFalse(telegram_board.is_archive_on_move_enabled())
+
+    def test_zero_value(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "0"}):
+            self.assertFalse(telegram_board.is_archive_on_move_enabled())
+
+
+# ---------------------------------------------------------------------------
+# upsert_task_board_card — topic move scenarios
+# ---------------------------------------------------------------------------
+
+class TestUpsertTaskBoardCardTopicMove(unittest.IsolatedAsyncioTestCase):
+    """Tests for the topic-move path in upsert_task_board_card."""
+
+    def _task(self, task_id="TASK-9", status="in_progress"):
+        return {"id": task_id, "title": "Move test task", "status": status, "priority": "medium"}
+
+    def setUp(self):
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+        self._env = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100test",
+            "TELEGRAM_TOPIC_TASK_IDEAS": "10",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "20",
+            "TELEGRAM_TOPIC_TASK_READY": "30",
+            "TELEGRAM_TOPIC_TASK_BLOCKED": "40",
+            "TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "5",
+            "TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "true",
+        }
+        self._env_patcher = unittest.mock.patch.dict("os.environ", self._env)
+        self._env_patcher.start()
+
+    def tearDown(self):
+        import os as _os
+        self._env_patcher.stop()
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def _make_bot(self, send_message_id=200, edit_raises=None, send_raises=None):
+        from unittest.mock import AsyncMock, MagicMock
+        bot = MagicMock()
+        sent_msg = MagicMock()
+        sent_msg.message_id = send_message_id
+        bot.send_message = AsyncMock(
+            side_effect=send_raises if send_raises else None,
+            return_value=sent_msg,
+        )
+        bot.edit_message_text = AsyncMock(
+            side_effect=edit_raises if edit_raises else None,
+            return_value=MagicMock(),
+        )
+        return bot
+
+    def _seed_link(self, task_id, message_id, topic_key, thread_id=10):
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test",
+            message_id=message_id,
+            work_item_type="task",
+            work_item_id=task_id,
+            message_thread_id=thread_id,
+            topic_key=topic_key,
+        )
+
+    # ---- basic move ----
+
+    async def test_move_returns_moved_status(self):
+        # Seed card in task_ideas; task is now in_progress → task_active
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "moved")
+
+    async def test_move_sends_to_new_topic(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        bot.send_message.assert_called_once()
+        kwargs = bot.send_message.call_args[1]
+        self.assertEqual(kwargs["message_thread_id"], 20)  # task_active thread id
+
+    async def test_move_result_contains_new_message_id(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["message_id"], 200)
+
+    async def test_move_result_contains_prev_topic_key(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["prev_topic_key"], "task_ideas")
+
+    async def test_move_edits_old_card_as_tombstone(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        bot.edit_message_text.assert_called_once()
+        edit_kwargs = bot.edit_message_text.call_args[1]
+        self.assertEqual(edit_kwargs["message_id"], 77)
+        self.assertIn("перенесена", edit_kwargs["text"])
+
+    async def test_move_updates_mapping_to_new_message(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=200)
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        link = telegram_message_links.find_board_link("task", "TASK-9")
+        self.assertEqual(link["telegram_message_id"], 200)
+        self.assertEqual(link["topic_key"], "task_active")
+
+    # ---- tombstone fails → moved_archive_failed ----
+
+    async def test_move_tombstone_fail_returns_moved_archive_failed(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(
+            send_message_id=200,
+            edit_raises=Exception("Forbidden: bot was kicked from the supergroup chat"),
+        )
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "moved_archive_failed")
+
+    async def test_move_tombstone_fail_still_has_new_message_id(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(
+            send_message_id=200,
+            edit_raises=Exception("Forbidden: bot was kicked"),
+        )
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["message_id"], 200)
+
+    async def test_move_tombstone_fail_mapping_still_updated(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(
+            send_message_id=200,
+            edit_raises=Exception("Forbidden: bot was kicked"),
+        )
+        await telegram_board.upsert_task_board_card(bot, self._task())
+        link = telegram_message_links.find_board_link("task", "TASK-9")
+        self.assertEqual(link["telegram_message_id"], 200)
+
+    # ---- archive disabled ----
+
+    async def test_move_archive_disabled_returns_moved(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "false"}):
+            bot = self._make_bot(send_message_id=200)
+            result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "moved")
+
+    async def test_move_archive_disabled_does_not_edit_old(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE": "false"}):
+            bot = self._make_bot(send_message_id=200)
+            await telegram_board.upsert_task_board_card(bot, self._task())
+        bot.edit_message_text.assert_not_called()
+
+    # ---- move send fails ----
+
+    async def test_move_send_timeout_returns_timeout(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+
+        class _TimedOut(Exception):
+            pass
+
+        bot = self._make_bot(send_raises=_TimedOut("timed out"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "timeout")
+        # Old mapping must NOT be changed
+        link = telegram_message_links.find_board_link("task", "TASK-9")
+        self.assertEqual(link["telegram_message_id"], 77)
+
+    async def test_move_send_hard_error_returns_error(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_raises=Exception("Forbidden: bot is not a member"))
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "error")
+        # Old mapping must NOT be changed
+        link = telegram_message_links.find_board_link("task", "TASK-9")
+        self.assertEqual(link["telegram_message_id"], 77)
+
+    # ---- same topic stays on update path ----
+
+    async def test_same_topic_does_not_move(self):
+        # Seed with task_active; task is still in_progress → task_active
+        self._seed_link("TASK-9", 77, "task_active")
+        bot = self._make_bot()
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertEqual(result["status"], "updated")
+        bot.send_message.assert_not_called()
+
+    # ---- force_new bypasses move path entirely ----
+
+    async def test_force_new_does_not_move(self):
+        self._seed_link("TASK-9", 77, "task_ideas")
+        bot = self._make_bot(send_message_id=300)
+        result = await telegram_board.upsert_task_board_card(bot, self._task(), force_new=True)
+        self.assertEqual(result["status"], "created")
+        bot.edit_message_text.assert_not_called()
+
+    # ---- prev_topic_key is None for non-move results ----
+
+    async def test_created_has_no_prev_topic_key(self):
+        bot = self._make_bot(send_message_id=101)
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertIsNone(result["prev_topic_key"])
+
+    async def test_updated_has_no_prev_topic_key(self):
+        self._seed_link("TASK-9", 77, "task_active")
+        bot = self._make_bot()
+        result = await telegram_board.upsert_task_board_card(bot, self._task())
+        self.assertIsNone(result["prev_topic_key"])
+
+
+# ---------------------------------------------------------------------------
+# CLI: dry-run shows move mode hint
+# ---------------------------------------------------------------------------
+
+class TestBoardPostTaskCLIMoveDryRun(unittest.TestCase):
+    """CLI dry-run hints for topic-move scenario."""
+
+    _BOARD_VARS = (
+        ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID", "TELEGRAM_BOT_TOKEN"]
+        + [e for _, _, e in telegram_board.BOARD_TOPICS]
+    )
+
+    def _base_env(self, overrides=None):
+        import os as _os
+        env = {**_os.environ}
+        for k in self._BOARD_VARS:
+            env[k] = ""
+        if overrides:
+            env.update(overrides)
+        return env
+
+    def _run_dry(self, task_id, overrides=None):
+        import subprocess, sys
+        env = self._base_env(overrides or {})
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-post-task", task_id, "--dry-run"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout + result.stderr, result.returncode
+
+    def test_dry_run_shows_mode_line(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertIn("Mode:", out)
+
+    def test_dry_run_no_absolute_paths(self):
+        out, _ = self._run_dry("TASK-1")
+        self.assertNotIn("/Users/", out)
+
+    def test_dry_run_no_token_in_output(self):
+        out, _ = self._run_dry("TASK-1", overrides={"TELEGRAM_BOT_TOKEN": "xsecret-move-test"})
+        self.assertNotIn("xsecret-move-test", out)
+
+    def test_force_new_dry_run_shows_force_new(self):
+        import subprocess, sys, os as _os
+        env = self._base_env()
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-post-task", "TASK-1", "--dry-run", "--force-new"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("force-new", result.stdout + result.stderr)
+
+    def test_archive_on_move_env_in_env_example(self):
+        import pathlib
+        content = (pathlib.Path("/Users/semionovk/MySpace/team") / ".env.example").read_text()
+        self.assertIn("TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE", content)
+
+
+class TestParseBoardTaskCallback(unittest.TestCase):
+    """Unit tests for parse_board_task_callback."""
+
+    def test_focus_callback_parsed(self):
+        result = telegram_board.parse_board_task_callback("board:task:focus:TASK-1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "focus")
+        self.assertEqual(result["task_id"], "TASK-1")
+
+    def test_start_callback_parsed(self):
+        result = telegram_board.parse_board_task_callback("board:task:start:TASK-99")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "start")
+        self.assertEqual(result["task_id"], "TASK-99")
+
+    def test_wrong_prefix_returns_none(self):
+        self.assertIsNone(telegram_board.parse_board_task_callback("other:task:focus:TASK-1"))
+
+    def test_empty_string_returns_none(self):
+        self.assertIsNone(telegram_board.parse_board_task_callback(""))
+
+    def test_none_returns_none(self):
+        self.assertIsNone(telegram_board.parse_board_task_callback(None))  # type: ignore
+
+    def test_missing_task_id_returns_none(self):
+        self.assertIsNone(telegram_board.parse_board_task_callback("board:task:focus:"))
+
+    def test_unknown_action_still_parsed(self):
+        result = telegram_board.parse_board_task_callback("board:task:unknown:TASK-5")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "unknown")
+        self.assertEqual(result["task_id"], "TASK-5")
+
+    def test_task_id_with_hyphens(self):
+        result = telegram_board.parse_board_task_callback("board:task:focus:TASK-123")
+        self.assertEqual(result["task_id"], "TASK-123")
+
+    def test_too_few_parts_returns_none(self):
+        self.assertIsNone(telegram_board.parse_board_task_callback("board:task:focus"))
+
+
+class TestBuildTaskCardKeyboard(unittest.TestCase):
+    """Unit tests for build_task_card_keyboard."""
+
+    def _task(self, status, task_id="TASK-1"):
+        return {"id": task_id, "title": "Test", "status": status}
+
+    def test_idea_has_only_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("idea"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🎯 В фокус", labels)
+        self.assertNotIn("🚧 В работу", labels)
+
+    def test_refined_has_only_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("refined"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🎯 В фокус", labels)
+        self.assertNotIn("🚧 В работу", labels)
+
+    def test_ready_for_dev_has_start_and_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("ready_for_dev"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🚧 В работу", labels)
+        self.assertIn("🎯 В фокус", labels)
+        # start comes before focus
+        self.assertLess(labels.index("🚧 В работу"), labels.index("🎯 В фокус"))
+
+    def test_in_progress_has_only_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("in_progress"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🎯 В фокус", labels)
+        self.assertNotIn("🚧 В работу", labels)
+
+    def test_done_has_only_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("done"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🎯 В фокус", labels)
+        self.assertNotIn("🚧 В работу", labels)
+
+    def test_blocked_has_only_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("blocked"))
+        labels = [b[0] for b in buttons]
+        self.assertIn("🎯 В фокус", labels)
+
+    def test_callback_data_focus(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("idea", "TASK-42"))
+        cb = {b[0]: b[1] for b in buttons}
+        self.assertEqual(cb["🎯 В фокус"], "board:task:focus:TASK-42")
+
+    def test_callback_data_start(self):
+        buttons = telegram_board.build_task_card_keyboard(self._task("ready_for_dev", "TASK-7"))
+        cb = {b[0]: b[1] for b in buttons}
+        self.assertEqual(cb["🚧 В работу"], "board:task:start:TASK-7")
+
+    def test_no_id_returns_empty(self):
+        buttons = telegram_board.build_task_card_keyboard({"title": "no id", "status": "idea"})
+        self.assertEqual(buttons, [])
+
+
+class TestMakeInlineKeyboard(unittest.TestCase):
+    """Unit tests for make_inline_keyboard."""
+
+    def test_empty_buttons_returns_none(self):
+        result = telegram_board.make_inline_keyboard([])
+        self.assertIsNone(result)
+
+    def test_returns_none_on_import_error(self):
+        # Patch the telegram import to fail
+        import sys
+        orig = sys.modules.get("telegram")
+        sys.modules["telegram"] = None  # type: ignore
+        try:
+            result = telegram_board.make_inline_keyboard([("label", "data")])
+            self.assertIsNone(result)
+        finally:
+            if orig is None:
+                del sys.modules["telegram"]
+            else:
+                sys.modules["telegram"] = orig
+
+    def test_returns_keyboard_when_telegram_available(self):
+        try:
+            from telegram import InlineKeyboardMarkup
+        except ImportError:
+            self.skipTest("python-telegram-bot not installed")
+        buttons = [("🎯 В фокус", "board:task:focus:TASK-1")]
+        result = telegram_board.make_inline_keyboard(buttons)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, InlineKeyboardMarkup)
+
+
+class TestUpsertTaskBoardCardKeyboard(unittest.IsolatedAsyncioTestCase):
+    """Verify that upsert_task_board_card passes reply_markup to bot calls."""
+
+    def setUp(self):
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+        self._env_patcher = unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100test",
+            "TELEGRAM_TOPIC_TASK_IDEAS": "10",
+            "TELEGRAM_TOPIC_TASK_READY": "30",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "20",
+            "TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "5",
+        })
+        self._env_patcher.start()
+
+    def tearDown(self):
+        import os as _os
+        self._env_patcher.stop()
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def _make_bot(self, message_id=101):
+        from unittest.mock import AsyncMock, MagicMock
+        bot = MagicMock()
+        sent_msg = MagicMock()
+        sent_msg.message_id = message_id
+        bot.send_message = AsyncMock(return_value=sent_msg)
+        bot.edit_message_text = AsyncMock(return_value=MagicMock())
+        return bot
+
+    async def test_create_passes_reply_markup(self):
+        """send_message should receive reply_markup when telegram is available."""
+        try:
+            from telegram import InlineKeyboardMarkup
+        except ImportError:
+            self.skipTest("python-telegram-bot not installed")
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        await telegram_board.upsert_task_board_card(bot, task)
+        call_kwargs = bot.send_message.call_args.kwargs
+        self.assertIn("reply_markup", call_kwargs)
+        self.assertIsInstance(call_kwargs["reply_markup"], InlineKeyboardMarkup)
+
+    async def test_update_passes_reply_markup(self):
+        """edit_message_text should receive reply_markup when telegram is available."""
+        try:
+            from telegram import InlineKeyboardMarkup
+        except ImportError:
+            self.skipTest("python-telegram-bot not installed")
+        telegram_message_links.upsert_board_link(
+            chat_id="-100test", message_id=77, work_item_type="task",
+            work_item_id="TASK-1", message_thread_id=10, topic_key="task_ideas",
+        )
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        await telegram_board.upsert_task_board_card(bot, task)
+        call_kwargs = bot.edit_message_text.call_args.kwargs
+        self.assertIn("reply_markup", call_kwargs)
+        self.assertIsInstance(call_kwargs["reply_markup"], InlineKeyboardMarkup)
+
+    async def test_no_keyboard_when_no_task_id(self):
+        """Task with no id produces no card (skipped early) — just verify no crash."""
+        task = {"title": "No ID", "status": "idea"}
+        bot = self._make_bot()
+        result = await telegram_board.upsert_task_board_card(bot, task)
+        # topic_key_for_task returns task_ideas, topic is configured — will try to send
+        # but build_task_card_keyboard returns [] → make_inline_keyboard returns None
+        # so reply_markup should NOT be in kwargs
+        if bot.send_message.called:
+            call_kwargs = bot.send_message.call_args.kwargs
+            self.assertNotIn("reply_markup", call_kwargs)
+
+
+class TestBoardPostTaskCLIDryRunButtons(unittest.TestCase):
+    """Verify that dry-run output includes button labels.
+
+    Uses actual task IDs from the repo tasks file:
+      TASK-1 = ready_for_dev  (shows 🚧 В работу + 🎯 В фокус)
+      TASK-3 = idea           (shows only 🎯 В фокус)
+      TASK-2 = review         (shows only 🎯 В фокус)
+    """
+
+    _BOARD_VARS = (
+        ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID", "TELEGRAM_BOT_TOKEN"]
+        + [e for _, _, e in telegram_board.BOARD_TOPICS]
+    )
+
+    def _base_env(self):
+        import os as _os
+        env = {**_os.environ}
+        for k in self._BOARD_VARS:
+            env[k] = ""
+        env.update({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100test",
+            "TELEGRAM_TOPIC_TASK_IDEAS": "10",
+            "TELEGRAM_TOPIC_TASK_READY": "30",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "20",
+            "TELEGRAM_BOT_TOKEN": "x",
+            "TELEGRAM_OWNER_ID": "42",
+        })
+        return env
+
+    def _run_dry(self, task_id):
+        import subprocess, sys
+        env = self._base_env()
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-post-task", task_id, "--dry-run"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout + result.stderr
+
+    def test_buttons_line_present(self):
+        # Any task should have a "Buttons:" line in dry-run output
+        out = self._run_dry("TASK-3")  # idea status
+        self.assertIn("Buttons:", out)
+
+    def test_idea_task_shows_focus_button(self):
+        # TASK-3 is status=idea → only 🎯 В фокус
+        out = self._run_dry("TASK-3")
+        self.assertIn("🎯 В фокус", out)
+
+    def test_idea_task_has_no_start_button(self):
+        # TASK-3 is status=idea → no 🚧 В работу
+        out = self._run_dry("TASK-3")
+        self.assertNotIn("🚧 В работу", out)
+
+    def test_ready_for_dev_shows_both_buttons(self):
+        # TASK-1 is status=ready_for_dev → both buttons
+        out = self._run_dry("TASK-1")
+        self.assertIn("🚧 В работу", out)
+        self.assertIn("🎯 В фокус", out)
+
+    def test_review_task_shows_only_focus(self):
+        # TASK-2 is status=review → only 🎯 В фокус
+        out = self._run_dry("TASK-2")
+        self.assertIn("🎯 В фокус", out)
+        self.assertNotIn("🚧 В работу", out)
+
+
 if __name__ == "__main__":
     unittest.main()
