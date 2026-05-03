@@ -410,20 +410,25 @@ def format_agent_log_card(event: dict) -> str:
 # Functional API — simple env-backed helpers
 # ---------------------------------------------------------------------------
 
-# String key → env var name (matches BoardTopic value names)
-_TOPIC_KEY_ENV: dict[str, str] = {
-    "task_ideas":   "TELEGRAM_TOPIC_TASK_IDEAS",
-    "task_ready":   "TELEGRAM_TOPIC_TASK_READY",
-    "task_active":  "TELEGRAM_TOPIC_TASK_ACTIVE",
-    "task_blocked": "TELEGRAM_TOPIC_TASK_BLOCKED",
-    "bugs_new":     "TELEGRAM_TOPIC_BUGS_NEW",
-    "bugs_active":  "TELEGRAM_TOPIC_BUGS_ACTIVE",
-    "needs_input":  "TELEGRAM_TOPIC_NEEDS_INPUT",
-    "releases":     "TELEGRAM_TOPIC_RELEASES",
-    "agent_log":    "TELEGRAM_TOPIC_AGENT_LOG",
-    "decisions":    "TELEGRAM_TOPIC_DECISIONS",
-}
+# Canonical ordered topic list: (key, human_name, env_var)
+# Single source of truth — used by board-config, board-ping, and send_board_message.
+BOARD_TOPICS: list[tuple[str, str, str]] = [
+    ("task_ideas",   "Task Ideas",   "TELEGRAM_TOPIC_TASK_IDEAS"),
+    ("task_ready",   "Task Ready",   "TELEGRAM_TOPIC_TASK_READY"),
+    ("task_active",  "Task Active",  "TELEGRAM_TOPIC_TASK_ACTIVE"),
+    ("task_blocked", "Task Blocked", "TELEGRAM_TOPIC_TASK_BLOCKED"),
+    ("bugs_new",     "Bugs New",     "TELEGRAM_TOPIC_BUGS_NEW"),
+    ("bugs_active",  "Bugs Active",  "TELEGRAM_TOPIC_BUGS_ACTIVE"),
+    ("needs_input",  "Needs Input",  "TELEGRAM_TOPIC_NEEDS_INPUT"),
+    ("releases",     "Releases",     "TELEGRAM_TOPIC_RELEASES"),
+    ("agent_log",    "Agent Log",    "TELEGRAM_TOPIC_AGENT_LOG"),
+    ("decisions",    "Decisions",    "TELEGRAM_TOPIC_DECISIONS"),
+]
 
+# String key → env var name — derived from BOARD_TOPICS, kept for convenience
+_TOPIC_KEY_ENV: dict[str, str] = {key: env for key, _, env in BOARD_TOPICS}
+
+# Russian display labels (used in format_board_config_status)
 _TOPIC_LABELS: dict[str, str] = {
     "task_ideas":   "💡 Идеи задач",
     "task_ready":   "✅ Готовые задачи",
@@ -569,3 +574,72 @@ async def send_board_message(
     except Exception:
         logging.exception("telegram_board: failed to send message to topic %r", topic_key)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Board ping — smoke-test helper
+# ---------------------------------------------------------------------------
+
+async def ping_board_topics(bot: object) -> list[dict]:
+    """
+    Send a ping message to every configured board topic.
+
+    Returns a list of result dicts (ordered by BOARD_TOPICS):
+    {
+        "key":    str,   # topic key e.g. "task_ideas"
+        "name":   str,   # human name e.g. "Task Ideas"
+        "env":    str,   # env var name
+        "status": "ok" | "missing" | "error",
+        "error":  str | None,   # short error description on failure
+    }
+
+    Does not raise. Never prints tokens or absolute paths.
+    """
+    if not is_board_enabled():
+        raise ValueError("Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
+
+    board_chat_id = get_board_chat_id()
+    if not board_chat_id:
+        raise ValueError("TELEGRAM_BOARD_CHAT_ID is not set")
+
+    results: list[dict] = []
+    for key, name, env_name in BOARD_TOPICS:
+        topic_id = get_topic_id(key)
+        if topic_id is None:
+            results.append({
+                "key": key, "name": name, "env": env_name,
+                "status": "missing", "error": f"{env_name} not set",
+            })
+            continue
+        try:
+            await bot.send_message(  # type: ignore[union-attr]
+                chat_id=board_chat_id,
+                message_thread_id=topic_id,
+                text=f"✅ ping: {name}",
+            )
+            results.append({
+                "key": key, "name": name, "env": env_name,
+                "status": "ok", "error": None,
+            })
+        except Exception as exc:
+            short_err = str(exc)[:120]
+            logging.warning("telegram_board: ping failed for %r: %s", key, short_err)
+            results.append({
+                "key": key, "name": name, "env": env_name,
+                "status": "error", "error": short_err,
+            })
+
+    return results
+
+
+def format_ping_results(results: list[dict]) -> str:
+    """Format ping results as human-readable text for Telegram or terminal."""
+    lines = ["Telegram Board ping result:"]
+    for r in results:
+        if r["status"] == "ok":
+            lines.append(f"✅ {r['name']}")
+        elif r["status"] == "missing":
+            lines.append(f"— {r['name']} (not configured)")
+        else:
+            lines.append(f"❌ {r['name']} — {r['error']}")
+    return "\n".join(lines)

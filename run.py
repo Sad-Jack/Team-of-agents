@@ -723,6 +723,79 @@ def cmd_board_config(_args):
             print(f"- {m}")
 
 
+def cmd_board_ping(args):
+    """Smoke-test Telegram Board topics.
+
+    Sends a ping message to every configured topic.
+    With --dry-run shows what would be sent without calling the Telegram API.
+    Does not print TELEGRAM_BOT_TOKEN or absolute paths.
+    """
+    import telegram_board
+
+    dry_run: bool = getattr(args, "dry_run", False)
+    board_enabled = (os.getenv("TELEGRAM_BOARD_ENABLED") or "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    board_chat_id = (os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip()
+
+    if dry_run:
+        print("Board ping — dry run (no messages sent)")
+        print()
+        print(f"TELEGRAM_BOARD_ENABLED: {str(board_enabled).lower()}")
+        print(f"TELEGRAM_BOARD_CHAT_ID: {'(set)' if board_chat_id else '(not set)'}")
+        print()
+        print("Topics:")
+        missing = []
+        for key, name, env_name in telegram_board.BOARD_TOPICS:
+            tid = telegram_board.get_topic_id(key)
+            if tid is not None:
+                print(f"  ✅ {name}: would send to thread {tid}")
+            else:
+                print(f"  — {name}: {env_name} not set (would skip)")
+                missing.append(env_name)
+        if missing:
+            print()
+            print("Missing env vars:")
+            for m in missing:
+                print(f"  - {m}")
+        return
+
+    # Live ping
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        print("Error: TELEGRAM_BOT_TOKEN is not set")
+        raise SystemExit(1)
+
+    if not board_enabled:
+        print("Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
+        raise SystemExit(1)
+
+    if not board_chat_id:
+        print("Error: TELEGRAM_BOARD_CHAT_ID is not set")
+        raise SystemExit(1)
+
+    import asyncio
+
+    async def _run_ping():
+        try:
+            from telegram import Bot
+        except ImportError:
+            print("Error: python-telegram-bot is not installed")
+            raise SystemExit(1)
+        bot = Bot(token=token)
+        try:
+            results = await telegram_board.ping_board_topics(bot)
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            raise SystemExit(1)
+        print(telegram_board.format_ping_results(results))
+        has_error = any(r["status"] == "error" for r in results)
+        if has_error:
+            raise SystemExit(1)
+
+    asyncio.run(_run_ping())
+
+
 def cmd_managed_project(_args):
     info = validate_managed_repo_path()
     print("Управляемый проект:")
@@ -1974,6 +2047,13 @@ def build_parser():
 
     board_cfg_parser = subparsers.add_parser("board-config", help="Show Telegram Board diagnostics")
     board_cfg_parser.set_defaults(func=cmd_board_config)
+
+    board_ping_parser = subparsers.add_parser("board-ping", help="Smoke-test Telegram Board topics")
+    board_ping_parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Show what would be sent without calling Telegram API",
+    )
+    board_ping_parser.set_defaults(func=cmd_board_ping)
 
     telegram_parser = subparsers.add_parser("telegram", help="Run Telegram bot in polling mode")
     telegram_parser.set_defaults(func=cmd_telegram)

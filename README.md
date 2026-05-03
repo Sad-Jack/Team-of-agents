@@ -290,8 +290,8 @@ TELEGRAM_TOPIC_RELEASES=10              # число после /
 ### Проверить конфигурацию
 
 ```bash
-python3 run.py board-config        # CLI-диагностика Board (показывает topic id, не показывает токены)
-python3 run.py telegram-config     # общий Telegram-конфиг (только SET флаги без значений)
+python3 run.py board-config        # конфигурация Board (topic id, missing vars)
+python3 run.py telegram-config     # общий Telegram-конфиг (только _SET флаги)
 ```
 
 В Telegram (приватный чат с ботом):
@@ -299,11 +299,31 @@ python3 run.py telegram-config     # общий Telegram-конфиг (толь�
 /board_config
 ```
 
-`python3 run.py board-config` — отдельная диагностика Board, показывает значения topic id
-(они не являются секретами) и список незаполненных переменных.
+### Smoke-test топиков
 
-`python3 run.py telegram-config` — общий конфиг Telegram, выводит только флаги `_SET=true/false`
-без значений (используется для CI и скриптов).
+Проверить, что бот реально может писать в каждый топик:
+
+```bash
+# Показать что будет отправлено, без вызова API:
+python3 run.py board-ping --dry-run
+
+# Реальный smoke-test (требует TELEGRAM_BOT_TOKEN + все Board vars):
+python3 run.py board-ping
+```
+
+В Telegram:
+```
+/board_ping
+```
+
+Команда отправляет `✅ ping: <Topic Name>` в каждый настроенный топик и возвращает итог:
+```
+Telegram Board ping result:
+✅ Task Ideas
+✅ Task Ready
+❌ Task Active — Forbidden: bot is not a member
+— Needs Input (not configured)
+```
 
 ### Важные правила Board
 

@@ -280,11 +280,35 @@ TELEGRAM_TOPIC_RELEASES=10              # число после последне
 ### Проверить конфигурацию
 
 ```bash
-# Отдельная Board-диагностика (показывает значения topic id, не показывает токены):
+# Детальная Board-диагностика (topic id, missing vars):
 python3 run.py board-config
 
 # В Telegram (приватный чат):
 /board_config
+```
+
+### Smoke-test топиков
+
+```bash
+# Показать план без вызова API:
+python3 run.py board-ping --dry-run
+
+# Реальный smoke-test (требует TELEGRAM_BOT_TOKEN + Board vars):
+python3 run.py board-ping
+```
+
+В Telegram:
+```
+/board_ping
+```
+
+Smoke-test отправляет `✅ ping: <Topic Name>` в каждый настроенный топик и выводит:
+```
+Telegram Board ping result:
+✅ Task Ideas
+✅ Releases
+❌ Task Active — Forbidden: bot is not a member
+— Needs Input (not configured)
 ```
 
 **Разница между командами:**
@@ -292,7 +316,9 @@ python3 run.py board-config
 | Команда | Назначение | Показывает topic id? |
 |---|---|---|
 | `python3 run.py board-config` | Детальная Board-диагностика | ✅ да (не секрет) |
-| `python3 run.py telegram-config` | Общий Telegram-конфиг (CI/scripts) | ❌ только `_SET` флаги |
+| `python3 run.py board-ping --dry-run` | Smoke-test план без API | ✅ да |
+| `python3 run.py board-ping` | Реальный smoke-test | — результат |
+| `python3 run.py telegram-config` | Общий Telegram-конфиг (CI) | ❌ только `_SET` |
 
 Подробнее об архитектуре Board: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)
 
@@ -301,8 +327,9 @@ python3 run.py board-config
 ## Диагностика
 
 ```bash
-python3 run.py board-config      # детальная диагностика Telegram Board
-python3 run.py telegram-config   # общий Telegram-конфиг (только _SET флаги)
-python3 run.py doctor             # полная диагностика системы
-python3 run.py config             # конфиг LLM-провайдера
+python3 run.py board-config           # детальная диагностика Telegram Board
+python3 run.py board-ping --dry-run   # smoke-test план (без API)
+python3 run.py telegram-config        # общий Telegram-конфиг (только _SET флаги)
+python3 run.py doctor                 # полная диагностика системы
+python3 run.py config                 # конфиг LLM-провайдера
 ```

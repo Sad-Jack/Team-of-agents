@@ -1084,5 +1084,118 @@ class TestBoardConfigHandler(unittest.TestCase):
         self.assertNotIn("/home/", text)
 
 
+class TestBoardPingHandler(unittest.TestCase):
+    """Tests for /board_ping command."""
+
+    def _make_ctx(self, owner_id="42"):
+        from unittest.mock import AsyncMock, MagicMock
+        ctx = SimpleNamespace()
+        ctx.bot_data = {"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}}
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+        ctx.bot = fake_bot
+        return ctx
+
+    def test_board_ping_registered(self):
+        """Handler is accessible on the module."""
+        self.assertTrue(callable(telegram_bot.board_ping_handler))
+
+    def test_board_ping_denied_for_non_owner(self):
+        upd = _FakeUpdate(user_id="99", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+        self.assertIn("denied", upd.message.replies[0].lower())
+
+    def test_board_ping_replies_when_board_disabled(self):
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": ""}):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+        text = "\n".join(upd.message.replies)
+        self.assertIn("disabled", text.lower())
+
+    def test_board_ping_replies_when_chat_id_missing(self):
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        with patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "",
+        }):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+        text = "\n".join(upd.message.replies)
+        self.assertIn("TELEGRAM_BOARD_CHAT_ID", text)
+
+    def test_board_ping_sends_to_topics(self):
+        from unittest.mock import AsyncMock, MagicMock
+        import telegram_board as tb
+
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        fake_msg = MagicMock()
+        fake_msg.message_id = 1
+        ctx.bot.send_message = AsyncMock(return_value=fake_msg)
+
+        env = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100xyz",
+            "TELEGRAM_TOPIC_RELEASES": "42",
+            "TELEGRAM_TOPIC_DECISIONS": "7",
+        }
+        # clear all other topic vars
+        clear = {env_name: "" for _, _, env_name in tb.BOARD_TOPICS}
+        clear.update(env)
+        with patch.dict("os.environ", clear):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+
+        self.assertEqual(ctx.bot.send_message.call_count, 2)
+        text = "\n".join(upd.message.replies)
+        self.assertIn("ping result", text.lower())
+        self.assertIn("✅", text)
+
+    def test_board_ping_continues_after_send_failure(self):
+        from unittest.mock import AsyncMock, MagicMock
+        import telegram_board as tb
+
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        ctx.bot.send_message = AsyncMock(side_effect=Exception("Telegram error"))
+
+        env = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100xyz",
+            "TELEGRAM_TOPIC_RELEASES": "42",
+            "TELEGRAM_TOPIC_DECISIONS": "7",
+        }
+        clear = {env_name: "" for _, _, env_name in tb.BOARD_TOPICS}
+        clear.update(env)
+        with patch.dict("os.environ", clear):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+
+        # Both topics attempted
+        self.assertEqual(ctx.bot.send_message.call_count, 2)
+        text = "\n".join(upd.message.replies)
+        self.assertIn("❌", text)
+
+    def test_board_ping_no_token_in_reply(self):
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        with patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "",
+            "TELEGRAM_BOT_TOKEN": "secret-token-value-xyz",
+        }):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+        text = "\n".join(upd.message.replies)
+        self.assertNotIn("secret-token-value-xyz", text)
+
+    def test_board_ping_no_absolute_paths_in_reply(self):
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": ""}):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+        text = "\n".join(upd.message.replies)
+        self.assertNotIn("/Users/", text)
+        self.assertNotIn("/home/", text)
+
+
 if __name__ == "__main__":
     unittest.main()

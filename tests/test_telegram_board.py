@@ -843,5 +843,248 @@ class TestBoardConfigCLI(unittest.TestCase):
         self.assertIn("not set", out)
 
 
+# ---------------------------------------------------------------------------
+# BOARD_TOPICS canonical list
+# ---------------------------------------------------------------------------
+
+class TestBoardTopicsConstant(unittest.TestCase):
+    def test_board_topics_has_10_entries(self):
+        self.assertEqual(len(telegram_board.BOARD_TOPICS), 10)
+
+    def test_board_topics_has_required_keys(self):
+        keys = {t[0] for t in telegram_board.BOARD_TOPICS}
+        for expected in ("task_ideas", "task_ready", "task_active", "task_blocked",
+                         "bugs_new", "bugs_active", "needs_input",
+                         "releases", "agent_log", "decisions"):
+            with self.subTest(key=expected):
+                self.assertIn(expected, keys)
+
+    def test_board_topics_tuple_structure(self):
+        for entry in telegram_board.BOARD_TOPICS:
+            self.assertEqual(len(entry), 3)
+            key, name, env = entry
+            self.assertIsInstance(key, str)
+            self.assertIsInstance(name, str)
+            self.assertTrue(env.startswith("TELEGRAM_TOPIC_"))
+
+    def test_topic_key_env_derived_from_board_topics(self):
+        for key, _name, env in telegram_board.BOARD_TOPICS:
+            self.assertEqual(telegram_board._TOPIC_KEY_ENV[key], env)
+
+
+# ---------------------------------------------------------------------------
+# ping_board_topics + format_ping_results
+# ---------------------------------------------------------------------------
+
+class TestPingBoardTopics(unittest.IsolatedAsyncioTestCase):
+
+    def _patch_env(self, overrides):
+        import os
+        _BOARD_VARS = [
+            "TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+        ] + [env for _, _, env in telegram_board.BOARD_TOPICS]
+        clear = {k: "" for k in _BOARD_VARS}
+        clear.update(overrides)
+        return patch.dict(os.environ, clear)
+
+    async def test_raises_when_board_disabled(self):
+        with self._patch_env({}):
+            with self.assertRaises(ValueError) as ctx:
+                await telegram_board.ping_board_topics(None)
+        self.assertIn("disabled", str(ctx.exception))
+
+    async def test_raises_when_chat_id_missing(self):
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true"}):
+            with self.assertRaises(ValueError) as ctx:
+                await telegram_board.ping_board_topics(None)
+        self.assertIn("TELEGRAM_BOARD_CHAT_ID", str(ctx.exception))
+
+    async def test_missing_topic_reported_without_send(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100123"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        # All topics missing → send never called
+        fake_bot.send_message.assert_not_called()
+        self.assertTrue(all(r["status"] == "missing" for r in results))
+
+    async def test_sends_to_configured_topics(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_msg = MagicMock()
+        fake_msg.message_id = 1
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(return_value=fake_msg)
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100abc",
+                              "TELEGRAM_TOPIC_RELEASES": "42",
+                              "TELEGRAM_TOPIC_DECISIONS": "7"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        ok_keys = {r["key"] for r in results if r["status"] == "ok"}
+        self.assertIn("releases", ok_keys)
+        self.assertIn("decisions", ok_keys)
+        self.assertEqual(fake_bot.send_message.call_count, 2)
+
+    async def test_send_uses_correct_thread_id(self):
+        from unittest.mock import AsyncMock, MagicMock, call
+        fake_msg = MagicMock()
+        fake_msg.message_id = 10
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(return_value=fake_msg)
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100xyz",
+                              "TELEGRAM_TOPIC_RELEASES": "99"}):
+            await telegram_board.ping_board_topics(fake_bot)
+
+        call_kwargs = fake_bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs["message_thread_id"], 99)
+        self.assertEqual(call_kwargs["chat_id"], "-100xyz")
+        self.assertIn("Releases", call_kwargs["text"])
+
+    async def test_continues_after_send_failure(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=Exception("Network error"))
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100z",
+                              "TELEGRAM_TOPIC_RELEASES": "10",
+                              "TELEGRAM_TOPIC_DECISIONS": "11"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        error_results = [r for r in results if r["status"] == "error"]
+        self.assertEqual(len(error_results), 2)
+        # Both were attempted despite the first failing
+        self.assertEqual(fake_bot.send_message.call_count, 2)
+
+    async def test_error_result_has_short_error_message(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=Exception("Forbidden: bot is not a member"))
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100z",
+                              "TELEGRAM_TOPIC_RELEASES": "10"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        err = next(r for r in results if r["key"] == "releases")
+        self.assertEqual(err["status"], "error")
+        self.assertIn("Forbidden", err["error"])
+
+    async def test_all_results_returned_for_all_topics(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100z"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        self.assertEqual(len(results), len(telegram_board.BOARD_TOPICS))
+
+
+class TestFormatPingResults(unittest.TestCase):
+    def _make_results(self, statuses: dict) -> list:
+        results = []
+        for key, name, env in telegram_board.BOARD_TOPICS:
+            status = statuses.get(key, "missing")
+            error = "some error" if status == "error" else None
+            results.append({"key": key, "name": name, "env": env,
+                            "status": status, "error": error})
+        return results
+
+    def test_ok_shown_with_checkmark(self):
+        results = self._make_results({"releases": "ok"})
+        text = telegram_board.format_ping_results(results)
+        self.assertIn("✅ Releases", text)
+
+    def test_missing_shown_with_dash(self):
+        results = self._make_results({})
+        text = telegram_board.format_ping_results(results)
+        self.assertIn("not configured", text)
+
+    def test_error_shown_with_cross(self):
+        results = self._make_results({"decisions": "error"})
+        text = telegram_board.format_ping_results(results)
+        self.assertIn("❌ Decisions", text)
+
+    def test_no_token_in_output(self):
+        results = self._make_results({"releases": "ok"})
+        text = telegram_board.format_ping_results(results)
+        self.assertNotIn("token", text.lower())
+        self.assertNotIn("TELEGRAM_BOT_TOKEN", text)
+
+    def test_no_absolute_paths(self):
+        results = self._make_results({"releases": "ok"})
+        text = telegram_board.format_ping_results(results)
+        self.assertNotIn("/Users/", text)
+        self.assertNotIn("/home/", text)
+
+
+# ---------------------------------------------------------------------------
+# board-ping CLI: dry-run
+# ---------------------------------------------------------------------------
+
+class TestBoardPingCLIDryRun(unittest.TestCase):
+
+    def _run_dry(self, env_overrides: dict) -> str:
+        import subprocess, sys, os as _os
+        _BOARD_VARS = ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+                       "TELEGRAM_BOT_TOKEN"] + [env for _, _, env in telegram_board.BOARD_TOPICS]
+        env = {**_os.environ}
+        for k in _BOARD_VARS:
+            env[k] = ""
+        env.update(env_overrides)
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-ping", "--dry-run"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout
+
+    def test_dry_run_does_not_call_api(self):
+        # Even with a fake token and chat_id set, dry-run should output without crashing
+        out = self._run_dry({"TELEGRAM_BOARD_ENABLED": "true",
+                             "TELEGRAM_BOARD_CHAT_ID": "-100abc",
+                             "TELEGRAM_BOT_TOKEN": "fake-token"})
+        self.assertIn("dry run", out)
+
+    def test_dry_run_shows_topics(self):
+        out = self._run_dry({"TELEGRAM_TOPIC_RELEASES": "29",
+                             "TELEGRAM_BOARD_CHAT_ID": "-100x",
+                             "TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("Releases", out)
+        self.assertIn("29", out)
+
+    def test_dry_run_shows_missing(self):
+        out = self._run_dry({"TELEGRAM_BOARD_ENABLED": "true",
+                             "TELEGRAM_BOARD_CHAT_ID": "-100x"})
+        self.assertIn("not set", out)
+
+    def test_dry_run_no_token_leaked(self):
+        out = self._run_dry({"TELEGRAM_BOT_TOKEN": "super-secret-xyz"})
+        self.assertNotIn("super-secret-xyz", out)
+
+    def test_dry_run_no_absolute_paths(self):
+        out = self._run_dry({})
+        self.assertNotIn("/Users/", out)
+        self.assertNotIn("/home/", out)
+
+    def test_board_ping_in_argparse_help(self):
+        import subprocess, sys
+        result = subprocess.run(
+            [sys.executable, "run.py", "--help"],
+            capture_output=True, text=True,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("board-ping", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

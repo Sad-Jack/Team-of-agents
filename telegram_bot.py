@@ -633,6 +633,7 @@ async def help_handler(update: Any, context: Any) -> None:
         "/help         — эта справка\n"
         "/status       — Статус проекта\n"
         "/board_config — конфигурация Telegram Board\n"
+        "/board_ping   — smoke-test: отправить ping во все топики Board\n"
         "/actions      — список поддерживаемых действий\n"
         "/dryrun <текст>  — только план, без выполнения\n"
         "/execute <текст> — план + выполнение\n"
@@ -666,6 +667,22 @@ async def board_config_handler(update: Any, context: Any) -> None:
         return
     import telegram_board
     text = telegram_board.format_board_config_status()
+    await _reply(update, text)
+
+
+async def board_ping_handler(update: Any, context: Any) -> None:
+    """Send a ping message to every configured board topic. Owner-only."""
+    cfg = context.bot_data["telegram_config"]
+    if not is_owner(update, cfg["owner_id"]):
+        await _reply(update, "Access denied.")
+        return
+    import telegram_board
+    try:
+        results = await telegram_board.ping_board_topics(context.bot)
+    except ValueError as exc:
+        await _reply(update, str(exc))
+        return
+    text = telegram_board.format_ping_results(results)
     await _reply(update, text)
 
 
@@ -1007,6 +1024,7 @@ def build_application(config: dict) -> Any:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("board_config", board_config_handler))
+    app.add_handler(CommandHandler("board_ping", board_ping_handler))
     app.add_handler(CommandHandler("status", status_handler))
     app.add_handler(CommandHandler("actions", actions_handler))
     app.add_handler(CommandHandler("dryrun", dryrun_handler))
