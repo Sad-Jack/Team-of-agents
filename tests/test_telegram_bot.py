@@ -42,10 +42,14 @@ class _FakeMessage:
 
 
 class _FakeUpdate:
-    def __init__(self, user_id, text="", voice=None):
+    def __init__(self, user_id, text="", voice=None, reply_to_msg_id=None, chat_id=None):
         self.effective_user = SimpleNamespace(id=user_id)
+        self.effective_chat = SimpleNamespace(id=chat_id if chat_id is not None else user_id)
         self.message = _FakeMessage(text=text)
         self.message.voice = voice
+        self.message.reply_to_message = (
+            SimpleNamespace(message_id=reply_to_msg_id) if reply_to_msg_id is not None else None
+        )
 
 
 class _FakeTGFile:
@@ -94,15 +98,48 @@ class TelegramBotTests(unittest.TestCase):
             "explanation": "ok",
             "warnings": [],
         }
-        text = telegram_bot.format_supervisor_plan(plan)
+        text = telegram_bot.format_supervisor_plan(plan, debug=True)
         self.assertIn("План действия", text)
         self.assertIn("create_task", text)
 
+    def test_format_supervisor_plan_human(self):
+        plan = {
+            "intent": "create_task",
+            "confidence": 0.9,
+            "requires_confirmation": False,
+            "action": {"name": "create_task", "args": {"title": "My Task"}},
+            "explanation": "Creating a task",
+            "warnings": [],
+        }
+        text = telegram_bot.format_supervisor_plan(plan, debug=False)
+        self.assertIn("🧩", text)
+        self.assertIn("My Task", text)
+        self.assertNotIn("intent", text)
+        self.assertNotIn("confidence", text)
+
     def test_format_supervisor_execution_result(self):
         result = {"executed": True, "action": "create_task", "result": {"id": "TASK-1"}}
-        text = telegram_bot.format_supervisor_execution_result(result)
+        text = telegram_bot.format_supervisor_execution_result(result, debug=True)
         self.assertIn("Результат выполнения", text)
         self.assertIn("executed: true", text)
+
+    def test_format_supervisor_execution_result_human(self):
+        result = {
+            "executed": True,
+            "action": "create_task",
+            "result": {"id": "TASK-1", "title": "My Task", "status": "idea"},
+        }
+        text = telegram_bot.format_supervisor_execution_result(result, debug=False)
+        self.assertIn("✅", text)
+        self.assertIn("TASK-1", text)
+        self.assertNotIn("executed: true", text)
+        self.assertNotIn("Результат выполнения", text)
+
+    def test_debug_mode_default_false(self):
+        import os as _os
+        with patch.dict("os.environ", {}, clear=False):
+            _os.environ.pop("TELEGRAM_DEBUG_MODE", None)
+            self.assertFalse(telegram_bot.is_debug_mode())
 
     def test_truncate_text(self):
         text = telegram_bot.truncate_text("a" * 5000, limit=100)
@@ -291,9 +328,10 @@ class _FakeCallbackUpdate:
 
 
 class _FakeSendBot:
-    def __init__(self, raise_on_send=False):
+    def __init__(self, raise_on_send=False, returned_message_id=None):
         self.sent = []
         self._raise = raise_on_send
+        self._message_id = returned_message_id
 
     async def get_file(self, _file_id):
         return _FakeTGFile()
@@ -302,6 +340,9 @@ class _FakeSendBot:
         if self._raise:
             raise RuntimeError("send failed")
         self.sent.append({"chat_id": chat_id, "text": text})
+        if self._message_id is not None:
+            return SimpleNamespace(message_id=self._message_id)
+        return None
 
 
 def _make_ctx(owner_id="42", bot=None):
@@ -493,15 +534,17 @@ class TestStatusNotifications(unittest.TestCase):
         bot = _FakeSendBot()
         ctx = _make_ctx(bot=bot)
         with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
-            asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_TASK_PLAN, _CREATE_TASK_RESULT))
+            with patch("telegram_message_links.add_message_link"):
+                asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_TASK_PLAN, _CREATE_TASK_RESULT))
         self.assertTrue(any("TASK-99" in m["text"] for m in bot.sent))
-        self.assertTrue(any("🆕" in m["text"] for m in bot.sent))
+        self.assertTrue(any("🧩" in m["text"] for m in bot.sent))
 
     def test_notify_action_result_create_bug(self):
         bot = _FakeSendBot()
         ctx = _make_ctx(bot=bot)
         with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
-            asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_BUG_PLAN, _CREATE_BUG_RESULT))
+            with patch("telegram_message_links.add_message_link"):
+                asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_BUG_PLAN, _CREATE_BUG_RESULT))
         self.assertTrue(any("🐞" in m["text"] for m in bot.sent))
 
     def test_execute_create_task_sends_notification(self):
@@ -542,13 +585,22 @@ class TestStartHandler(unittest.TestCase):
     def test_start_shows_self_managed(self):
         upd = self._run_start(managed_path=".")
         text = "\n".join(upd.message.replies)
-        self.assertIn("self-managed", text)
-        self.assertIn("MANAGED_REPO_PATH=..", text)
+        self.assertIn("MANAGED_REPO_PATH", text)
+        self.assertNotIn("/sys", text)
+        self.assertNotIn("/managed", text)
 
     def test_start_shows_embedded(self):
         upd = self._run_start(managed_path="..")
         text = "\n".join(upd.message.replies)
-        self.assertIn("embedded", text)
+        self.assertIn("внешнему проекту", text)
+        self.assertNotIn("/managed", text)
+
+    def test_start_no_absolute_paths(self):
+        upd = self._run_start(managed_path="..")
+        text = "\n".join(upd.message.replies)
+        self.assertNotIn("/sys", text)
+        self.assertNotIn("/managed", text)
+        self.assertNotIn("/Users", text)
 
     def test_start_has_study_button(self):
         upd = _FakeUpdate(user_id="42", text="/start")
@@ -626,6 +678,181 @@ class TestStudyProjectCallback(unittest.TestCase):
         ctx = _make_ctx(owner_id="99")
         asyncio.run(telegram_bot.study_project_callback(upd, ctx))
         self.assertIn("Доступ запрещён", upd.callback_query.edits[0])
+
+
+class TestTaskCards(unittest.TestCase):
+    def test_format_task_card_task_icon_and_fields(self):
+        task = {
+            "id": "TASK-1", "title": "Add healthcheck", "status": "idea",
+            "priority": "high", "description": "Verify system health.",
+        }
+        card = telegram_bot._format_task_card(task, "task")
+        self.assertIn("🧩", card)
+        self.assertIn("TASK-1", card)
+        self.assertIn("Add healthcheck", card)
+        self.assertIn("Ответь", card)
+        self.assertIn("high", card)
+
+    def test_format_task_card_bug_icon_and_severity(self):
+        bug = {
+            "id": "TASK-2", "title": "Crash on start", "status": "idea",
+            "severity": "critical", "priority": "high",
+        }
+        card = telegram_bot._format_task_card(bug, "bug")
+        self.assertIn("🐞", card)
+        self.assertIn("TASK-2", card)
+        self.assertIn("critical", card)
+        self.assertNotIn("Приоритет", card)
+
+    def test_format_task_card_unknown_severity_shows_priority(self):
+        bug = {"id": "TASK-3", "title": "Minor", "status": "idea", "severity": "unknown", "priority": "low"}
+        card = telegram_bot._format_task_card(bug, "bug")
+        self.assertIn("Приоритет", card)
+
+    def test_send_task_card_sends_to_status_chat(self):
+        bot = _FakeSendBot()
+        ctx = _make_ctx(bot=bot)
+        task = {"id": "TASK-1", "title": "Test", "status": "idea", "priority": "medium"}
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.add_message_link"):
+                asyncio.run(telegram_bot._send_task_card(ctx, task, "task"))
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIn("🧩", bot.sent[0]["text"])
+        self.assertIn("TASK-1", bot.sent[0]["text"])
+
+    def test_send_task_card_stores_link_when_message_id_returned(self):
+        bot = _FakeSendBot(returned_message_id=42)
+        ctx = _make_ctx(bot=bot)
+        task = {"id": "TASK-5", "title": "Test", "status": "idea", "priority": "medium"}
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.add_message_link") as mock_add:
+                asyncio.run(telegram_bot._send_task_card(ctx, task, "task"))
+        mock_add.assert_called_once_with("100", 42, "task", "TASK-5")
+
+    def test_send_task_card_no_link_stored_when_no_message_id(self):
+        bot = _FakeSendBot(returned_message_id=None)
+        ctx = _make_ctx(bot=bot)
+        task = {"id": "TASK-6", "title": "Test", "status": "idea"}
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.add_message_link") as mock_add:
+                asyncio.run(telegram_bot._send_task_card(ctx, task, "task"))
+        mock_add.assert_not_called()
+
+    def test_send_task_card_skipped_when_no_status_chat(self):
+        bot = _FakeSendBot()
+        ctx = _make_ctx(bot=bot)
+        task = {"id": "TASK-7", "title": "Test", "status": "idea"}
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": ""}, clear=False):
+            asyncio.run(telegram_bot._send_task_card(ctx, task, "task"))
+        self.assertEqual(bot.sent, [])
+
+    def test_notify_create_task_sends_task_card(self):
+        bot = _FakeSendBot()
+        ctx = _make_ctx(bot=bot)
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.add_message_link"):
+                asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_TASK_PLAN, _CREATE_TASK_RESULT))
+        self.assertTrue(any("🧩" in m["text"] for m in bot.sent))
+        self.assertTrue(any("TASK-99" in m["text"] for m in bot.sent))
+        self.assertTrue(any("Ответь" in m["text"] for m in bot.sent))
+
+    def test_notify_create_bug_sends_bug_card(self):
+        bot = _FakeSendBot()
+        ctx = _make_ctx(bot=bot)
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.add_message_link"):
+                asyncio.run(telegram_bot._notify_action_result(ctx, _CREATE_BUG_PLAN, _CREATE_BUG_RESULT))
+        self.assertTrue(any("🐞" in m["text"] for m in bot.sent))
+        self.assertTrue(any("TASK-100" in m["text"] for m in bot.sent))
+
+    def test_no_status_chat_id_does_not_break_main_flow(self):
+        upd = _FakeUpdate(user_id="42", text="создай задачу")
+        bot = _FakeSendBot()
+        ctx = _make_ctx(bot=bot)
+        ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": ""}, clear=False):
+            with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
+                with patch("telegram_bot.execute_supervisor_action", return_value=_CREATE_TASK_RESULT):
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+        # No card sent (status chat not configured)
+        self.assertEqual(bot.sent, [])
+        # Reply was still sent to the user
+        self.assertTrue(len(upd.message.replies) > 0)
+
+
+class TestReplyRouting(unittest.TestCase):
+    def test_reply_to_linked_task_enriches_context(self):
+        upd = _FakeUpdate(user_id="42", text="бери в работу", reply_to_msg_id=55, chat_id="100")
+        ctx = _make_ctx()
+        with patch("telegram_message_links.find_link", return_value={
+            "telegram_chat_id": "100",
+            "telegram_message_id": 55,
+            "work_item_type": "task",
+            "work_item_id": "TASK-7",
+        }):
+            with patch("telegram_bot.handle_user_text") as handle_mock:
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+        handle_mock.assert_called_once()
+        enriched_text = handle_mock.call_args[0][2]
+        self.assertIn("TASK-7", enriched_text)
+        self.assertIn("бери в работу", enriched_text)
+
+    def test_reply_to_linked_bug_enriches_context(self):
+        upd = _FakeUpdate(user_id="42", text="что по этому?", reply_to_msg_id=77, chat_id="100")
+        ctx = _make_ctx()
+        with patch("telegram_message_links.find_link", return_value={
+            "telegram_chat_id": "100",
+            "telegram_message_id": 77,
+            "work_item_type": "bug",
+            "work_item_id": "TASK-3",
+        }):
+            with patch("telegram_bot.handle_user_text") as handle_mock:
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+        enriched_text = handle_mock.call_args[0][2]
+        self.assertIn("TASK-3", enriched_text)
+        self.assertIn("bug", enriched_text)
+
+    def test_reply_to_unknown_in_status_chat_shows_hint(self):
+        upd = _FakeUpdate(user_id="42", text="что делать?", reply_to_msg_id=99, chat_id="100")
+        ctx = _make_ctx()
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.find_link", return_value=None):
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+        self.assertTrue(any("Не нашёл" in r for r in upd.message.replies))
+
+    def test_reply_to_unknown_outside_status_chat_routes_normally(self):
+        upd = _FakeUpdate(user_id="42", text="Создай задачу", reply_to_msg_id=99, chat_id="999")
+        ctx = _make_ctx()
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+            with patch("telegram_message_links.find_link", return_value=None):
+                with patch("telegram_bot.handle_user_text") as handle_mock:
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+        handle_mock.assert_called_once()
+        self.assertEqual(handle_mock.call_args[0][2], "Создай задачу")
+
+    def test_plain_text_no_reply_routes_normally(self):
+        upd = _FakeUpdate(user_id="42", text="Создай задачу")
+        ctx = _make_ctx()
+        with patch("telegram_bot.handle_user_text") as handle_mock:
+            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        handle_mock.assert_called_once()
+        self.assertEqual(handle_mock.call_args[0][2], "Создай задачу")
+
+    def test_no_status_chat_id_reply_to_linked_still_works(self):
+        """Even without TELEGRAM_STATUS_CHAT_ID set, reply to a stored link is enriched."""
+        upd = _FakeUpdate(user_id="42", text="отмени", reply_to_msg_id=55, chat_id="42")
+        ctx = _make_ctx()
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": ""}, clear=False):
+            with patch("telegram_message_links.find_link", return_value={
+                "telegram_chat_id": "42",
+                "telegram_message_id": 55,
+                "work_item_type": "task",
+                "work_item_id": "TASK-9",
+            }):
+                with patch("telegram_bot.handle_user_text") as handle_mock:
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+        enriched = handle_mock.call_args[0][2]
+        self.assertIn("TASK-9", enriched)
 
 
 if __name__ == "__main__":

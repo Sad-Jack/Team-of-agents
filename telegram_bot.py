@@ -31,6 +31,7 @@ from supervisor import (
     execute_supervisor_action,
     plan_supervisor_action,
 )
+import telegram_message_links
 
 
 def truncate_text(text: str, limit: int = 3500) -> str:
@@ -85,6 +86,159 @@ async def send_status_notification(context: Any, text: str) -> None:
         logging.exception("Failed to send status notification")
 
 
+def is_debug_mode() -> bool:
+    return _parse_bool(os.getenv("TELEGRAM_DEBUG_MODE"), default=False)
+
+
+# Human-readable labels for each supervisor action (icon, short Russian description)
+_ACTION_ICONS: dict[str, tuple[str, str]] = {
+    "create_task": ("🧩", "Создам задачу"),
+    "create_bug": ("🐞", "Создам баг"),
+    "run_next": ("▶️", "Выполню следующий шаг задачи"),
+    "run_all": ("⚡", "Запущу все задачи в очереди"),
+    "list_tasks": ("📋", "Покажу список задач"),
+    "show_task": ("🔍", "Покажу задачу"),
+    "backlog": ("📋", "Покажу backlog"),
+    "ready": ("✅", "Покажу готовые задачи"),
+    "blocked": ("🚫", "Покажу заблокированные задачи"),
+    "next_task": ("➡️", "Найду следующую задачу"),
+    "context": ("📌", "Покажу контекст"),
+    "agents": ("🤖", "Покажу агентов"),
+    "config": ("⚙️", "Покажу конфигурацию"),
+    "create_release": ("🚀", "Создам релиз"),
+    "list_releases": ("📦", "Покажу список релизов"),
+    "show_release": ("📦", "Покажу релиз"),
+    "release_readiness": ("📊", "Проверю готовность релиза"),
+    "release_notes": ("📝", "Подготовлю release notes"),
+    "release_risks": ("⚠️", "Покажу риски релиза"),
+    "rollback_plan": ("🔄", "Покажу план отката"),
+    "create_decision": ("📐", "Зафиксирую архитектурное решение"),
+    "list_decisions": ("📐", "Покажу список решений"),
+    "show_decision": ("📐", "Покажу решение"),
+    "repo_scan": ("🔍", "Просканирую репозиторий"),
+    "repo_tree": ("🌳", "Покажу дерево файлов"),
+    "repo_search": ("🔍", "Поищу в репозитории"),
+    "repo_file": ("📄", "Прочитаю файл"),
+    "attach_repo_context": ("🔗", "Прикреплю контекст репозитория"),
+    "dev_plan": ("🛠️", "Подготовлю план разработки"),
+    "run_command": ("⚙️", "Запущу команду"),
+    "apply_patch": ("🩹", "Применю патч"),
+    "add_dependency": ("🔗", "Добавлю зависимость"),
+    "remove_dependency": ("🔗", "Удалю зависимость"),
+    "block_task": ("🚫", "Заблокирую задачу"),
+    "unblock_task": ("✅", "Разблокирую задачу"),
+}
+
+
+def _format_plan_human(plan: dict) -> str:
+    """User-facing Russian plan summary — no technical internals."""
+    action = plan.get("action") or {}
+    action_name = action.get("name", "")
+    args = action.get("args") or {}
+    explanation = str(plan.get("explanation", "")).strip()
+    requires_confirmation = plan.get("requires_confirmation", False)
+    warnings = plan.get("warnings") or []
+
+    icon, label = _ACTION_ICONS.get(action_name, ("🤔", "Планирую действие"))
+    lines = [f"{icon} {label}"]
+
+    title = args.get("title", "")
+    description = args.get("description", "")
+    task_id = args.get("task_id") or args.get("id", "")
+
+    if title:
+        lines.append(f"Название: {title}")
+    if description:
+        lines.append(f"Описание: {truncate_text(description, limit=300)}")
+    if task_id and action_name not in {"create_task", "create_bug"}:
+        lines.append(f"Задача: {task_id}")
+
+    if explanation and explanation.lower() not in {"ok", "—", "-"}:
+        lines.append(f"\n{explanation}")
+
+    if requires_confirmation:
+        lines.append("\n⚠️ Рискованное действие — для выполнения используй /yes <запрос>")
+
+    for w in warnings:
+        lines.append(f"⚠️ {w}")
+
+    return truncate_text("\n".join(lines))
+
+
+def _result_items_human(data: Any, action: str = "") -> str:
+    """Format action result data as readable Russian text."""
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return truncate_text(data, limit=2000)
+    if isinstance(data, list):
+        if not data:
+            return "Список пуст."
+        lines = []
+        for item in data[:15]:
+            if isinstance(item, dict):
+                item_id = item.get("id", "")
+                title = item.get("title", "")
+                status = item.get("status", "")
+                if item_id and title:
+                    lines.append(f"• {item_id}: {title}" + (f" [{status}]" if status else ""))
+            else:
+                lines.append(f"• {item}")
+        if len(data) > 15:
+            lines.append(f"... и ещё {len(data) - 15}")
+        return "\n".join(lines)
+    if isinstance(data, dict):
+        msg = data.get("message")
+        if msg and isinstance(msg, str):
+            return truncate_text(msg, limit=2000)
+        for key in ("summary", "text", "title"):
+            val = data.get(key)
+            if val and isinstance(val, str):
+                return truncate_text(val, limit=2000)
+    return ""
+
+
+def _format_result_human(result: dict) -> str:
+    """User-facing Russian execution result — no technical internals."""
+    action = result.get("action", "")
+    executed = bool(result.get("executed"))
+    r = result.get("result") or {}
+    if not isinstance(r, dict):
+        r_raw = result.get("result")
+        r = {}
+    else:
+        r_raw = r
+
+    if not executed:
+        msg = result.get("message") or result.get("refusal_reason") or "Действие не выполнено."
+        return f"ℹ️ {truncate_text(str(msg), limit=2000)}"
+
+    if action == "create_task":
+        task_id = r.get("id", "?")
+        title = r.get("title", "?")
+        status = r.get("status", "idea")
+        return f"✅ Задача создана\n\n{task_id}: {title}\nСтатус: {status}"
+
+    if action == "create_bug":
+        task_id = r.get("id", "?")
+        title = r.get("title", "?")
+        status = r.get("status", "idea")
+        severity = r.get("severity", "")
+        lines = [f"✅ Баг создан", "", f"{task_id}: {title}", f"Статус: {status}"]
+        if severity and severity != "unknown":
+            lines.append(f"Серьёзность: {severity}")
+        return "\n".join(lines)
+
+    # Generic successful result: try to surface a readable message
+    body = _result_items_human(r_raw, action)
+    if body:
+        return f"✅ Готово\n\n{body}"
+    msg = result.get("message", "")
+    if msg:
+        return f"✅ Готово\n\n{truncate_text(str(msg), limit=2000)}"
+    return "✅ Выполнено"
+
+
 def is_owner(update: Any, owner_id: str) -> bool:
     user = getattr(update, "effective_user", None)
     if user is None:
@@ -93,7 +247,7 @@ def is_owner(update: Any, owner_id: str) -> bool:
     return str(user_id) == str(owner_id)
 
 
-def format_supervisor_plan(plan: dict) -> str:
+def _format_plan_debug(plan: dict) -> str:
     action = plan.get("action") or {}
     args = action.get("args") or {}
     warnings = plan.get("warnings") or []
@@ -120,6 +274,12 @@ def format_supervisor_plan(plan: dict) -> str:
     return truncate_text("\n".join(lines))
 
 
+def format_supervisor_plan(plan: dict, debug: bool = False) -> str:
+    if debug:
+        return _format_plan_debug(plan)
+    return _format_plan_human(plan)
+
+
 def _result_summary(result: Any) -> str:
     if result is None:
         return "(empty)"
@@ -135,7 +295,7 @@ def _result_summary(result: Any) -> str:
     return truncate_text(str(result), limit=900)
 
 
-def format_supervisor_execution_result(result: dict) -> str:
+def _format_result_debug(result: dict) -> str:
     action = result.get("action")
     executed = bool(result.get("executed"))
     status = "успех" if executed else "не выполнено"
@@ -158,6 +318,12 @@ def format_supervisor_execution_result(result: dict) -> str:
         lines.extend(["", "Ошибка:", truncate_text(str(result.get("error")), limit=900)])
 
     return truncate_text("\n".join(lines))
+
+
+def format_supervisor_execution_result(result: dict, debug: bool = False) -> str:
+    if debug:
+        return _format_result_debug(result)
+    return _format_result_human(result)
 
 
 def format_focus(focus: dict) -> str:
@@ -224,7 +390,7 @@ async def _run_dry(
             "requires_confirmation": bool(plan.get("requires_confirmation", False)),
         }
 
-    plan_text = format_supervisor_plan(plan)
+    plan_text = format_supervisor_plan(plan, debug=is_debug_mode())
 
     if plan.get("action"):
         try:
@@ -243,6 +409,46 @@ async def _run_dry(
     await _reply(update, plan_text)
 
 
+def _format_task_card(item: dict, work_item_type: str) -> str:
+    """Format a task/bug as a human-readable Telegram card message (Russian)."""
+    icon = "🧩" if work_item_type == "task" else "🐞"
+    item_id = item.get("id", "?")
+    title = item.get("title", "?")
+    status = item.get("status", "?")
+    priority = item.get("priority", "medium")
+    severity = item.get("severity", "")
+    description = truncate_text(item.get("description", "") or "", limit=200)
+
+    lines = [f"{icon} {item_id}: {title}", f"Статус: {status}"]
+    if severity and severity != "unknown":
+        lines.append(f"Серьёзность: {severity}")
+    else:
+        lines.append(f"Приоритет: {priority}")
+    if description:
+        lines.append(f"Описание: {description}")
+    lines.extend(["—", "Ответь на это сообщение, чтобы работать с задачей."])
+    return "\n".join(lines)
+
+
+async def _send_task_card(context: Any, item: dict, work_item_type: str) -> None:
+    """Send a task/bug card to the status chat and store the message link."""
+    chat_id = get_status_chat_id()
+    if not chat_id or not is_status_notifications_enabled():
+        return
+    card_text = _format_task_card(item, work_item_type)
+    try:
+        sent = await context.bot.send_message(chat_id=chat_id, text=card_text)
+        # Store Telegram message -> work item mapping so replies can be routed back.
+        # This lookup is done locally (no LLM call) to keep token usage minimal.
+        msg_id = getattr(sent, "message_id", None)
+        if msg_id is not None:
+            telegram_message_links.add_message_link(
+                chat_id, msg_id, work_item_type, item.get("id", "?")
+            )
+    except Exception:
+        logging.exception("Failed to send task card to status chat")
+
+
 async def _notify_action_result(context: Any, plan: dict, result: dict) -> None:
     if context is None:
         return
@@ -253,13 +459,9 @@ async def _notify_action_result(context: Any, plan: dict, result: dict) -> None:
         r = {}
 
     if action_name == "create_task":
-        task_id = r.get("id", action_args.get("id", "?"))
-        title = r.get("title", action_args.get("title", "?"))
-        await send_status_notification(context, f"🆕 Создана задача: {task_id}\nНазвание: {title}")
+        await _send_task_card(context, r, "task")
     elif action_name == "create_bug":
-        task_id = r.get("id", action_args.get("id", "?"))
-        title = r.get("title", action_args.get("title", "?"))
-        await send_status_notification(context, f"🐞 Создан баг: {task_id}\nНазвание: {title}")
+        await _send_task_card(context, r, "bug")
     elif action_name in {"run_next", "run_all", "advance_task", "prepare_task"}:
         task_id = action_args.get("task_id") or action_args.get("id") or r.get("task_id") or "?"
         status = r.get("final_status") or r.get("status") or "?"
@@ -310,7 +512,7 @@ async def _run_execute(
             f"❌ Ошибка при выполнении действия\nAction: {action_name}\nПричина: {exc}",
         )
         return
-    await _reply(update, format_supervisor_execution_result(result))
+    await _reply(update, format_supervisor_execution_result(result, debug=is_debug_mode()))
     await _notify_action_result(context, plan, result)
 
 
@@ -355,25 +557,24 @@ async def start_handler(update: Any, context: Any) -> None:
 
     from managed_project import get_managed_project_info
     info = get_managed_project_info()
-    system_root = info.get("system_root", "?")
-    managed_root = info.get("managed_repo_root", "?")
     managed_path = info.get("managed_repo_path", ".")
 
     if managed_path == ".":
-        mode = "self-managed"
-        mode_note = (
-            "⚠️ Сейчас я работаю над самим Team-of-agents. "
-            "Чтобы управлять внешним проектом, установи MANAGED_REPO_PATH=.."
+        mode_text = (
+            "⚠️ Сейчас я работаю над самим Team of Agents.\n"
+            "Чтобы подключить внешний проект, укажи MANAGED_REPO_PATH в .env."
         )
     else:
-        mode = "embedded"
-        mode_note = f"Managed repo: {managed_root}"
+        mode_text = "✅ Подключён к внешнему проекту."
 
     text = (
-        f"👋 Project Manager Bot\n\n"
-        f"Режим: {mode}\n"
-        f"System root: {system_root}\n"
-        f"{mode_note}\n\n"
+        "👋 Project Manager Bot\n\n"
+        f"{mode_text}\n\n"
+        "Что можно делать:\n"
+        "• Создай задачу: ...\n"
+        "• У нас баг: ...\n"
+        "• Что делать дальше?\n"
+        "• Статус проекта\n\n"
         "Напиши мне что нужно сделать, или используй /help."
     )
 
@@ -570,6 +771,36 @@ async def text_handler(update: Any, context: Any) -> None:
     user_text = (getattr(update.message, "text", "") or "").strip()
     if not user_text:
         return
+
+    # Reply-based task context: resolve message -> work item locally (no LLM call)
+    # before deciding how to route. This keeps token usage minimal for simple replies.
+    reply_to = getattr(update.message, "reply_to_message", None)
+    if reply_to is not None:
+        chat_id = str(getattr(update.effective_chat, "id", ""))
+        msg_id = getattr(reply_to, "message_id", None)
+        status_chat_id = get_status_chat_id()
+
+        if msg_id is not None:
+            link = telegram_message_links.find_link(chat_id, msg_id)
+            if link is not None:
+                # Enrich the user message with task/bug context for the supervisor
+                work_id = link["work_item_id"]
+                work_type = link.get("work_item_type", "task")
+                enriched = (
+                    f"Context: user replied to {work_id} ({work_type}). "
+                    f"User message: \"{user_text}\""
+                )
+                await handle_user_text(update, context, enriched, confirmed=False, force_execute=None)
+                return
+            if status_chat_id and chat_id == str(status_chat_id):
+                # Reply in the status chat to an unknown message – give friendly hint
+                await _reply(
+                    update,
+                    "Не нашёл связанную задачу для этого сообщения. "
+                    "Попробуй ответить на карточку задачи/бага.",
+                )
+                return
+
     await handle_user_text(update, context, user_text, confirmed=False, force_execute=None)
 
 
@@ -640,7 +871,7 @@ async def confirm_callback(update: Any, context: Any) -> None:
         await query.edit_message_text(f"Ошибка выполнения: {exc}")
         await send_status_notification(context, f"❌ Ошибка: {exc}")
         return
-    await query.edit_message_text(truncate_text(format_supervisor_execution_result(result)))
+    await query.edit_message_text(truncate_text(format_supervisor_execution_result(result, debug=is_debug_mode())))
     await _notify_action_result(context, plan, result)
 
 
