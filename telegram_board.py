@@ -8,10 +8,17 @@ Provides:
   - topic_for_* routing helpers
   - Human-readable card formatters (pure functions, no I/O)
 
-No Telegram posting is performed here.
-No inline buttons.
+Functional API (simple, env-backed):
+  - is_board_enabled() -> bool
+  - get_board_chat_id() -> str | None
+  - get_topic_id(topic_key) -> int | None
+  - get_board_config_status() -> dict
+  - format_board_config_status() -> str
+  - async send_board_message(context, topic_key, text, reply_markup) -> int | None
+
+No inline buttons in this layer.
 No reply-to routing.
-Local storage is the source of truth; this module only formats and maps.
+Local storage is the source of truth; this module only formats, maps, and publishes.
 """
 from __future__ import annotations
 
@@ -397,3 +404,168 @@ def format_agent_log_card(event: dict) -> str:
         lines.append(f"Время: {timestamp[:19]}")  # trim microseconds if present
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Functional API — simple env-backed helpers
+# ---------------------------------------------------------------------------
+
+# String key → env var name (matches BoardTopic value names)
+_TOPIC_KEY_ENV: dict[str, str] = {
+    "task_ideas":   "TELEGRAM_TOPIC_TASK_IDEAS",
+    "task_ready":   "TELEGRAM_TOPIC_TASK_READY",
+    "task_active":  "TELEGRAM_TOPIC_TASK_ACTIVE",
+    "task_blocked": "TELEGRAM_TOPIC_TASK_BLOCKED",
+    "bugs_new":     "TELEGRAM_TOPIC_BUGS_NEW",
+    "bugs_active":  "TELEGRAM_TOPIC_BUGS_ACTIVE",
+    "needs_input":  "TELEGRAM_TOPIC_NEEDS_INPUT",
+    "releases":     "TELEGRAM_TOPIC_RELEASES",
+    "agent_log":    "TELEGRAM_TOPIC_AGENT_LOG",
+    "decisions":    "TELEGRAM_TOPIC_DECISIONS",
+}
+
+_TOPIC_LABELS: dict[str, str] = {
+    "task_ideas":   "💡 Идеи задач",
+    "task_ready":   "✅ Готовые задачи",
+    "task_active":  "🚧 Активные задачи",
+    "task_blocked": "⛔ Заблокированные",
+    "bugs_new":     "🐞 Новые баги",
+    "bugs_active":  "🛠 Активные баги",
+    "needs_input":  "🟡 Нужна информация",
+    "releases":     "🚀 Релизы",
+    "agent_log":    "🧾 Лог агентов",
+    "decisions":    "📌 Решения (ADR)",
+}
+
+
+def is_board_enabled() -> bool:
+    """Return True when TELEGRAM_BOARD_ENABLED is a truthy value."""
+    return _parse_bool(os.getenv("TELEGRAM_BOARD_ENABLED"), default=False)
+
+
+def get_board_chat_id() -> Optional[str]:
+    """Return TELEGRAM_BOARD_CHAT_ID, or None if not set."""
+    val = (os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip()
+    return val if val else None
+
+
+def get_topic_id(topic_key: str) -> Optional[int]:
+    """
+    Return the integer message_thread_id for a topic key, or None.
+
+    Returns None when:
+    - topic_key is unknown
+    - env var is missing or empty
+    - env var is not a valid integer
+    """
+    env_name = _TOPIC_KEY_ENV.get(topic_key)
+    if not env_name:
+        return None
+    raw = (os.getenv(env_name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logging.warning("telegram_board: %s=%r is not a valid integer — ignored", env_name, raw)
+        return None
+
+
+def get_board_config_status() -> dict:
+    """
+    Return a dict describing the current board configuration state.
+
+    Structure:
+    {
+        "enabled": bool,
+        "chat_id_set": bool,
+        "topics": {
+            "task_ideas": {"env": "TELEGRAM_TOPIC_TASK_IDEAS", "set": bool, "value": int | None},
+            ...
+        }
+    }
+    """
+    topics: dict[str, dict] = {}
+    for key, env_name in _TOPIC_KEY_ENV.items():
+        tid = get_topic_id(key)
+        topics[key] = {
+            "env": env_name,
+            "set": tid is not None,
+            "value": tid,
+        }
+    return {
+        "enabled": is_board_enabled(),
+        "chat_id_set": get_board_chat_id() is not None,
+        "topics": topics,
+    }
+
+
+def format_board_config_status() -> str:
+    """
+    Human-readable Russian summary of the board configuration.
+    Does not include token values or absolute paths.
+    """
+    status = get_board_config_status()
+    enabled_label = "✅ включён" if status["enabled"] else "❌ выключен"
+    chat_label = "✅ задан" if status["chat_id_set"] else "❌ не задан"
+
+    lines = [
+        "📋 Конфигурация Telegram Board",
+        "",
+        f"Board: {enabled_label}",
+        f"Chat ID: {chat_label}",
+        "",
+        "Топики:",
+    ]
+    for key, info in status["topics"].items():
+        label = _TOPIC_LABELS.get(key, key)
+        state = "✅" if info["set"] else "—"
+        lines.append(f"  {state} {label}")
+
+    if not status["enabled"]:
+        lines.append("")
+        lines.append("Чтобы включить: TELEGRAM_BOARD_ENABLED=true в .env")
+
+    return "\n".join(lines)
+
+
+async def send_board_message(
+    context: object,
+    topic_key: str,
+    text: str,
+    reply_markup: object = None,
+) -> Optional[int]:
+    """
+    Send a message to a board forum topic.
+
+    Returns the message_id if sent, or None on any failure.
+    Never raises — all exceptions are caught and logged.
+    """
+    if not is_board_enabled():
+        return None
+
+    board_chat_id = get_board_chat_id()
+    if not board_chat_id:
+        logging.warning("telegram_board: send_board_message called but TELEGRAM_BOARD_CHAT_ID not set")
+        return None
+
+    topic_id = get_topic_id(topic_key)
+    if topic_id is None:
+        logging.warning(
+            "telegram_board: send_board_message topic_key=%r not configured, skipping", topic_key
+        )
+        return None
+
+    try:
+        kwargs: dict = {
+            "chat_id": board_chat_id,
+            "message_thread_id": topic_id,
+            "text": text,
+        }
+        if reply_markup is not None:
+            kwargs["reply_markup"] = reply_markup
+        msg = await context.bot.send_message(**kwargs)  # type: ignore[union-attr]
+        return getattr(msg, "message_id", None)
+    except Exception:
+        logging.exception("telegram_board: failed to send message to topic %r", topic_key)
+        return None

@@ -245,18 +245,46 @@ my-project/
 
 ---
 
-## Telegram Board (forum-группа)
+## Telegram Board / Admin Room
 
 Forum-группа используется как проектная доска — только для отображения карточек.
 Работа с задачами ведётся **только в приватном чате**.
 
-Добавь в `.env` при наличии forum-группы:
+### Переменные окружения Board
 
+| Переменная | Описание |
+|---|---|
+| `TELEGRAM_BOARD_ENABLED` | `true` чтобы включить. По умолчанию `false`. |
+| `TELEGRAM_BOARD_CHAT_ID` | ID форум-группы (отрицательное число). |
+| `TELEGRAM_TOPIC_TASK_IDEAS` | message_thread_id топика "Task Ideas" |
+| `TELEGRAM_TOPIC_TASK_READY` | message_thread_id топика "Task Ready" |
+| `TELEGRAM_TOPIC_TASK_ACTIVE` | message_thread_id топика "Task Active" |
+| `TELEGRAM_TOPIC_TASK_BLOCKED` | message_thread_id топика "Task Blocked" |
+| `TELEGRAM_TOPIC_BUGS_NEW` | message_thread_id топика "Bugs New" |
+| `TELEGRAM_TOPIC_BUGS_ACTIVE` | message_thread_id топика "Bugs Active" |
+| `TELEGRAM_TOPIC_NEEDS_INPUT` | message_thread_id топика "Needs Input" |
+| `TELEGRAM_TOPIC_RELEASES` | message_thread_id топика "Releases" |
+| `TELEGRAM_TOPIC_AGENT_LOG` | message_thread_id топика "Agent Log" |
+| `TELEGRAM_TOPIC_DECISIONS` | message_thread_id топика "Decisions" |
+
+### Как получить значения из ссылки на топик
+
+Ссылка на топик: `t.me/c/3952202151/10`
+
+Означает:
 ```env
-TELEGRAM_BOARD_CHAT_ID=<id форум-группы>
+TELEGRAM_BOARD_CHAT_ID=-1003952202151   # добавь -100 перед id из ссылки
+TELEGRAM_TOPIC_RELEASES=10              # число после последнего /
 ```
 
-Подробнее о топиках, статусах и inline-кнопках: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)
+### Проверить конфигурацию
+
+```bash
+/board_config    # в Telegram: показывает статус без секретов
+python3 run.py telegram-config   # в консоли: все флаги *_SET без значений
+```
+
+Подробнее об архитектуре Board: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)
 
 ---
 

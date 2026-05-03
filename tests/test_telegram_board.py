@@ -458,5 +458,268 @@ class TestTelegramConfigBoardOutput(unittest.TestCase):
                 self.assertIn(f"TELEGRAM_TOPIC_{t}_SET=", output)
 
 
+# ---------------------------------------------------------------------------
+# Functional API — is_board_enabled / get_board_chat_id / get_topic_id
+# ---------------------------------------------------------------------------
+
+class TestFunctionalAPI(unittest.TestCase):
+    """Tests for the simple env-backed functional API."""
+
+    def _patch(self, overrides):
+        """Context manager: patches env with overrides, clears board vars not in overrides."""
+        import os
+        _BOARD_VARS = [
+            "TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+            "TELEGRAM_TOPIC_TASK_IDEAS", "TELEGRAM_TOPIC_TASK_READY",
+            "TELEGRAM_TOPIC_TASK_ACTIVE", "TELEGRAM_TOPIC_TASK_BLOCKED",
+            "TELEGRAM_TOPIC_BUGS_NEW", "TELEGRAM_TOPIC_BUGS_ACTIVE",
+            "TELEGRAM_TOPIC_NEEDS_INPUT", "TELEGRAM_TOPIC_RELEASES",
+            "TELEGRAM_TOPIC_AGENT_LOG", "TELEGRAM_TOPIC_DECISIONS",
+        ]
+        clear = {k: "" for k in _BOARD_VARS}
+        clear.update(overrides)
+        return patch.dict(os.environ, clear)
+
+    # is_board_enabled
+    def test_is_board_enabled_false_by_default(self):
+        with self._patch({}):
+            self.assertFalse(telegram_board.is_board_enabled())
+
+    def test_is_board_enabled_true_string(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "true"}):
+            self.assertTrue(telegram_board.is_board_enabled())
+
+    def test_is_board_enabled_true_1(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "1"}):
+            self.assertTrue(telegram_board.is_board_enabled())
+
+    def test_is_board_enabled_true_yes(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "yes"}):
+            self.assertTrue(telegram_board.is_board_enabled())
+
+    def test_is_board_enabled_true_on(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "on"}):
+            self.assertTrue(telegram_board.is_board_enabled())
+
+    def test_is_board_enabled_false_string(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "false"}):
+            self.assertFalse(telegram_board.is_board_enabled())
+
+    # get_board_chat_id
+    def test_get_board_chat_id_none_when_missing(self):
+        with self._patch({}):
+            self.assertIsNone(telegram_board.get_board_chat_id())
+
+    def test_get_board_chat_id_returns_value(self):
+        with self._patch({"TELEGRAM_BOARD_CHAT_ID": "-1001234567"}):
+            self.assertEqual(telegram_board.get_board_chat_id(), "-1001234567")
+
+    def test_get_board_chat_id_none_for_whitespace(self):
+        with self._patch({"TELEGRAM_BOARD_CHAT_ID": "   "}):
+            self.assertIsNone(telegram_board.get_board_chat_id())
+
+    # get_topic_id
+    def test_get_topic_id_returns_int(self):
+        with self._patch({"TELEGRAM_TOPIC_RELEASES": "42"}):
+            self.assertEqual(telegram_board.get_topic_id("releases"), 42)
+
+    def test_get_topic_id_all_keys(self):
+        env = {
+            "TELEGRAM_TOPIC_TASK_IDEAS": "1",
+            "TELEGRAM_TOPIC_TASK_READY": "2",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "3",
+            "TELEGRAM_TOPIC_TASK_BLOCKED": "4",
+            "TELEGRAM_TOPIC_BUGS_NEW": "5",
+            "TELEGRAM_TOPIC_BUGS_ACTIVE": "6",
+            "TELEGRAM_TOPIC_NEEDS_INPUT": "7",
+            "TELEGRAM_TOPIC_RELEASES": "8",
+            "TELEGRAM_TOPIC_AGENT_LOG": "9",
+            "TELEGRAM_TOPIC_DECISIONS": "10",
+        }
+        with self._patch(env):
+            for key, expected in (
+                ("task_ideas", 1), ("task_ready", 2), ("task_active", 3),
+                ("task_blocked", 4), ("bugs_new", 5), ("bugs_active", 6),
+                ("needs_input", 7), ("releases", 8), ("agent_log", 9),
+                ("decisions", 10),
+            ):
+                with self.subTest(key=key):
+                    self.assertEqual(telegram_board.get_topic_id(key), expected)
+
+    def test_get_topic_id_none_when_missing(self):
+        with self._patch({}):
+            self.assertIsNone(telegram_board.get_topic_id("releases"))
+
+    def test_get_topic_id_none_for_invalid_int(self):
+        with self._patch({"TELEGRAM_TOPIC_RELEASES": "not-a-number"}):
+            self.assertIsNone(telegram_board.get_topic_id("releases"))
+
+    def test_get_topic_id_none_for_unknown_key(self):
+        with self._patch({}):
+            self.assertIsNone(telegram_board.get_topic_id("nonexistent_topic"))
+
+    # get_board_config_status
+    def test_get_board_config_status_structure(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "true",
+                          "TELEGRAM_BOARD_CHAT_ID": "-100999",
+                          "TELEGRAM_TOPIC_RELEASES": "7"}):
+            status = telegram_board.get_board_config_status()
+        self.assertIn("enabled", status)
+        self.assertIn("chat_id_set", status)
+        self.assertIn("topics", status)
+        self.assertIsInstance(status["topics"], dict)
+
+    def test_get_board_config_status_enabled_true(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "true"}):
+            status = telegram_board.get_board_config_status()
+        self.assertTrue(status["enabled"])
+
+    def test_get_board_config_status_chat_id_set(self):
+        with self._patch({"TELEGRAM_BOARD_CHAT_ID": "-100999"}):
+            status = telegram_board.get_board_config_status()
+        self.assertTrue(status["chat_id_set"])
+
+    def test_get_board_config_status_topic_set(self):
+        with self._patch({"TELEGRAM_TOPIC_RELEASES": "42"}):
+            status = telegram_board.get_board_config_status()
+        self.assertTrue(status["topics"]["releases"]["set"])
+        self.assertEqual(status["topics"]["releases"]["value"], 42)
+
+    def test_get_board_config_status_all_topics_present(self):
+        with self._patch({}):
+            status = telegram_board.get_board_config_status()
+        for key in ("task_ideas", "task_ready", "task_active", "task_blocked",
+                    "bugs_new", "bugs_active", "needs_input",
+                    "releases", "agent_log", "decisions"):
+            with self.subTest(key=key):
+                self.assertIn(key, status["topics"])
+
+    # format_board_config_status
+    def test_format_board_config_status_russian(self):
+        with self._patch({}):
+            text = telegram_board.format_board_config_status()
+        self.assertIn("Board", text)
+        self.assertIn("Chat ID", text)
+        # Contains Russian words
+        self.assertTrue(any(c in text for c in "аеёиоуыьъэюяАЕЁИОУЫЬЪЭЮЯ"),
+                        "Expected Russian text in output")
+
+    def test_format_board_config_status_enabled_shown(self):
+        with self._patch({"TELEGRAM_BOARD_ENABLED": "true"}):
+            text = telegram_board.format_board_config_status()
+        self.assertIn("включён", text)
+
+    def test_format_board_config_status_disabled_shown(self):
+        with self._patch({}):
+            text = telegram_board.format_board_config_status()
+        self.assertIn("выключен", text)
+
+    def test_format_board_config_status_no_token_values(self):
+        with self._patch({"TELEGRAM_BOARD_CHAT_ID": "-9998877665544",
+                          "TELEGRAM_TOPIC_RELEASES": "12345"}):
+            text = telegram_board.format_board_config_status()
+        self.assertNotIn("-9998877665544", text)
+        self.assertNotIn("12345", text)
+
+    def test_format_board_config_status_no_absolute_paths(self):
+        with self._patch({}):
+            text = telegram_board.format_board_config_status()
+        self.assertNotIn("/Users/", text)
+        self.assertNotIn("/home/", text)
+        self.assertNotIn("/var/", text)
+
+
+# ---------------------------------------------------------------------------
+# send_board_message
+# ---------------------------------------------------------------------------
+
+class TestSendBoardMessage(unittest.IsolatedAsyncioTestCase):
+    """Tests for async send_board_message."""
+
+    def _patch_env(self, overrides):
+        import os
+        _BOARD_VARS = [
+            "TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+            "TELEGRAM_TOPIC_TASK_IDEAS", "TELEGRAM_TOPIC_TASK_READY",
+            "TELEGRAM_TOPIC_TASK_ACTIVE", "TELEGRAM_TOPIC_TASK_BLOCKED",
+            "TELEGRAM_TOPIC_BUGS_NEW", "TELEGRAM_TOPIC_BUGS_ACTIVE",
+            "TELEGRAM_TOPIC_NEEDS_INPUT", "TELEGRAM_TOPIC_RELEASES",
+            "TELEGRAM_TOPIC_AGENT_LOG", "TELEGRAM_TOPIC_DECISIONS",
+        ]
+        clear = {k: "" for k in _BOARD_VARS}
+        clear.update(overrides)
+        return patch.dict(os.environ, clear)
+
+    async def test_returns_none_when_board_disabled(self):
+        with self._patch_env({}):
+            result = await telegram_board.send_board_message(None, "releases", "test")
+        self.assertIsNone(result)
+
+    async def test_returns_none_when_chat_id_missing(self):
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_TOPIC_RELEASES": "10"}):
+            result = await telegram_board.send_board_message(None, "releases", "test")
+        self.assertIsNone(result)
+
+    async def test_returns_none_when_topic_id_missing(self):
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100999"}):
+            result = await telegram_board.send_board_message(None, "releases", "test")
+        self.assertIsNone(result)
+
+    async def test_sends_message_with_correct_params(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_msg = MagicMock()
+        fake_msg.message_id = 99
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(return_value=fake_msg)
+        fake_context = MagicMock()
+        fake_context.bot = fake_bot
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100123",
+                              "TELEGRAM_TOPIC_RELEASES": "42"}):
+            result = await telegram_board.send_board_message(fake_context, "releases", "Hello Board")
+
+        self.assertEqual(result, 99)
+        fake_bot.send_message.assert_called_once()
+        call_kwargs = fake_bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs["chat_id"], "-100123")
+        self.assertEqual(call_kwargs["message_thread_id"], 42)
+        self.assertEqual(call_kwargs["text"], "Hello Board")
+
+    async def test_sends_message_with_reply_markup(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_msg = MagicMock()
+        fake_msg.message_id = 55
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(return_value=fake_msg)
+        fake_context = MagicMock()
+        fake_context.bot = fake_bot
+        markup = {"inline_keyboard": []}
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100123",
+                              "TELEGRAM_TOPIC_DECISIONS": "7"}):
+            await telegram_board.send_board_message(fake_context, "decisions", "Decision card", markup)
+
+        call_kwargs = fake_bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs["reply_markup"], markup)
+
+    async def test_catches_send_exception_returns_none(self):
+        from unittest.mock import AsyncMock, MagicMock
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=Exception("Network error"))
+        fake_context = MagicMock()
+        fake_context.bot = fake_bot
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100123",
+                              "TELEGRAM_TOPIC_RELEASES": "42"}):
+            result = await telegram_board.send_board_message(fake_context, "releases", "test")
+
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

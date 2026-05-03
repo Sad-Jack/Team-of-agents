@@ -1039,5 +1039,50 @@ class TestFastRouterConfigOutput(unittest.TestCase):
         self.assertIn("TELEGRAM_FAST_ROUTER_ENABLED=true", result.stdout)
 
 
+class TestBoardConfigHandler(unittest.TestCase):
+    """Tests for /board_config command."""
+
+    def _make_ctx(self, owner_id="42"):
+        ctx = SimpleNamespace()
+        ctx.bot_data = {"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}}
+        ctx.bot = _FakeBot()
+        return ctx
+
+    def _run_board_config(self, user_id="42", owner_id="42"):
+        upd = _FakeUpdate(user_id=user_id, text="/board_config")
+        ctx = self._make_ctx(owner_id=owner_id)
+        asyncio.run(telegram_bot.board_config_handler(upd, ctx))
+        return upd
+
+    def test_board_config_owner_gets_response(self):
+        upd = self._run_board_config(user_id="42", owner_id="42")
+        self.assertTrue(len(upd.message.replies) > 0)
+
+    def test_board_config_denied_for_non_owner(self):
+        upd = self._run_board_config(user_id="99", owner_id="42")
+        self.assertIn("denied", upd.message.replies[0].lower())
+
+    def test_board_config_response_contains_board_label(self):
+        upd = self._run_board_config(user_id="42", owner_id="42")
+        text = "\n".join(upd.message.replies)
+        self.assertIn("Board", text)
+
+    def test_board_config_no_token_values(self):
+        with patch.dict("os.environ", {
+            "TELEGRAM_BOARD_CHAT_ID": "-9998887776665",
+            "TELEGRAM_TOPIC_RELEASES": "77777",
+        }):
+            upd = self._run_board_config(user_id="42", owner_id="42")
+        text = "\n".join(upd.message.replies)
+        self.assertNotIn("-9998887776665", text)
+        self.assertNotIn("77777", text)
+
+    def test_board_config_no_absolute_paths(self):
+        upd = self._run_board_config(user_id="42", owner_id="42")
+        text = "\n".join(upd.message.replies)
+        self.assertNotIn("/Users/", text)
+        self.assertNotIn("/home/", text)
+
+
 if __name__ == "__main__":
     unittest.main()

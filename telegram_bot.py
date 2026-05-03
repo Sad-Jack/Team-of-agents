@@ -629,10 +629,11 @@ async def help_handler(update: Any, context: Any) -> None:
         "Уведомления:\n"
         "• Если задан TELEGRAM_STATUS_CHAT_ID — события агентов приходят в отдельный чат\n\n"
         "Slash-команды:\n"
-        "/start   — режим проекта + кнопка 'Изучить проект'\n"
-        "/help    — эта справка\n"
-        "/status  — Статус проекта\n"
-        "/actions — список поддерживаемых действий\n"
+        "/start        — режим проекта + кнопка 'Изучить проект'\n"
+        "/help         — эта справка\n"
+        "/status       — Статус проекта\n"
+        "/board_config — конфигурация Telegram Board\n"
+        "/actions      — список поддерживаемых действий\n"
         "/dryrun <текст>  — только план, без выполнения\n"
         "/execute <текст> — план + выполнение\n"
         "/yes <текст>     — подтверждение рискованного действия\n"
@@ -654,6 +655,17 @@ async def help_handler(update: Any, context: Any) -> None:
         "- Сбрось фокус\n\n"
         "Правило безопасности: рискованные действия выполняются только через /yes."
     )
+    await _reply(update, text)
+
+
+async def board_config_handler(update: Any, context: Any) -> None:
+    """Show Telegram Board configuration status. Owner-only."""
+    cfg = context.bot_data["telegram_config"]
+    if not is_owner(update, cfg["owner_id"]):
+        await _reply(update, "Access denied.")
+        return
+    import telegram_board
+    text = telegram_board.format_board_config_status()
     await _reply(update, text)
 
 
@@ -994,6 +1006,7 @@ def build_application(config: dict) -> Any:
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
+    app.add_handler(CommandHandler("board_config", board_config_handler))
     app.add_handler(CommandHandler("status", status_handler))
     app.add_handler(CommandHandler("actions", actions_handler))
     app.add_handler(CommandHandler("dryrun", dryrun_handler))
