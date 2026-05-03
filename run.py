@@ -426,7 +426,7 @@ def cmd_approve_patch(args):
 
 def cmd_apply_patch(args):
     tasks, task = _load_task_for_update(args.id)
-    result = apply_patch_proposal(task, repo_root=None, force=args.force)
+    result = apply_patch_proposal(task, repo_root=".", force=args.force)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["errors"]:
         add_history_event(task, "Patch proposal applied.", agent="orchestrator")

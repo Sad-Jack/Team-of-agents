@@ -13,10 +13,117 @@ import run
 from llm_client import FakeLLMClient
 from supervisor import (
     IMPLEMENTED_EXECUTION_ACTIONS,
+    SupervisorError,
     execute_supervisor_action,
+    extract_json_object,
     plan_supervisor_action,
     validate_supervisor_output,
 )
+
+
+class ExtractJsonObjectTests(unittest.TestCase):
+    def test_plain_json(self):
+        raw = '{"intent": "clarify", "confidence": 0.5, "requires_confirmation": false, "action": {"name": "clarify", "args": {}}, "explanation": "ok", "warnings": []}'
+        result = extract_json_object(raw)
+        self.assertEqual(result["intent"], "clarify")
+
+    def test_json_in_backtick_fence(self):
+        raw = '```json\n{"intent": "clarify", "x": 1}\n```'
+        result = extract_json_object(raw)
+        self.assertEqual(result["intent"], "clarify")
+
+    def test_json_in_plain_fence(self):
+        raw = '```\n{"intent": "clarify", "x": 1}\n```'
+        result = extract_json_object(raw)
+        self.assertEqual(result["intent"], "clarify")
+
+    def test_json_with_text_before_and_after(self):
+        raw = 'Вот план:\n{"intent": "clarify", "x": 1}\nДополнительный текст.'
+        result = extract_json_object(raw)
+        self.assertEqual(result["intent"], "clarify")
+
+    def test_ignores_text_after_first_valid_json(self):
+        raw = '{"intent": "create_task", "x": 1} extra text ignored'
+        result = extract_json_object(raw)
+        self.assertEqual(result["intent"], "create_task")
+
+    def test_invalid_text_raises_supervisor_error(self):
+        with self.assertRaises(SupervisorError):
+            extract_json_object("this is not json at all")
+
+    def test_empty_string_raises_supervisor_error(self):
+        with self.assertRaises(SupervisorError):
+            extract_json_object("")
+
+    def test_error_message_contains_preview(self):
+        raw = "not json"
+        try:
+            extract_json_object(raw)
+            self.fail("Expected SupervisorError")
+        except SupervisorError as exc:
+            self.assertIn("not json", str(exc))
+
+    def test_preview_truncated_to_1000_chars(self):
+        raw = "x" * 2000
+        try:
+            extract_json_object(raw)
+        except SupervisorError as exc:
+            msg = str(exc)
+            self.assertLessEqual(len(msg), 1200)
+
+
+class FakeProviderSupervisorTests(unittest.TestCase):
+    """Ensure FakeLLMClient returns valid JSON for conversational inputs."""
+
+    def setUp(self):
+        self.client = FakeLLMClient()
+        self.base_payload = {
+            "agent_name": "supervisor",
+            "supported_actions": [],
+        }
+
+    def _gen(self, user_text: str) -> dict:
+        payload = dict(self.base_payload, user_text=user_text)
+        raw = self.client.generate(payload)
+        return json.loads(raw)
+
+    def test_hello_returns_valid_json_clarify_or_unknown(self):
+        result = self._gen("привет")
+        self.assertIn("intent", result)
+        self.assertIn(result["intent"], {"clarify", "unknown"})
+        self.assertIsInstance(result.get("explanation"), str)
+
+    def test_vague_project_request_returns_valid_json(self):
+        result = self._gen("хочу такой проект сделать")
+        self.assertIn("intent", result)
+        self.assertIsInstance(result.get("explanation"), str)
+
+    def test_create_task_intent(self):
+        result = self._gen("Создай задачу: проверить Telegram")
+        self.assertEqual(result["intent"], "create_task")
+
+    def test_create_bug_intent(self):
+        result = self._gen("У нас баг: validate падает")
+        self.assertEqual(result["intent"], "create_bug")
+
+    def test_what_next_returns_next_task_or_next_work(self):
+        result = self._gen("Что делать дальше?")
+        self.assertIn(result["intent"], {"next_task", "next_work"})
+
+    def test_all_fake_outputs_pass_json_loads(self):
+        inputs = [
+            "привет",
+            "хочу такой проект сделать",
+            "Создай задачу: проверить Telegram",
+            "У нас баг: validate падает",
+            "Что делать дальше?",
+        ]
+        for text in inputs:
+            with self.subTest(text=text):
+                payload = dict(self.base_payload, user_text=text)
+                raw = self.client.generate(payload)
+                parsed = json.loads(raw)
+                self.assertIsInstance(parsed, dict)
 
 
 class SupervisorTests(unittest.TestCase):
