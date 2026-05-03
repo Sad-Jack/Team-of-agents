@@ -289,11 +289,21 @@ TELEGRAM_TOPIC_RELEASES=10              # число после /
 
 ### Проверить конфигурацию
 
+```bash
+python3 run.py board-config        # CLI-диагностика Board (показывает topic id, не показывает токены)
+python3 run.py telegram-config     # общий Telegram-конфиг (только SET флаги без значений)
+```
+
+В Telegram (приватный чат с ботом):
 ```
 /board_config
 ```
 
-Команда показывает какие топики настроены, без значений токенов и без локальных путей.
+`python3 run.py board-config` — отдельная диагностика Board, показывает значения topic id
+(они не являются секретами) и список незаполненных переменных.
+
+`python3 run.py telegram-config` — общий конфиг Telegram, выводит только флаги `_SET=true/false`
+без значений (используется для CI и скриптов).
 
 ### Важные правила Board
 

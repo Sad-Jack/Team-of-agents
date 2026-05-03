@@ -721,5 +721,127 @@ class TestSendBoardMessage(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
 
 
+# ---------------------------------------------------------------------------
+# board-config CLI command
+# ---------------------------------------------------------------------------
+
+class TestBoardConfigCLI(unittest.TestCase):
+    """Tests for `python3 run.py board-config`."""
+
+    def _run(self, env_overrides: dict) -> str:
+        import subprocess, sys, os as _os
+        # Clear all board vars, then apply overrides so .env file doesn't interfere
+        _BOARD_VARS = [
+            "TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+            "TELEGRAM_TOPIC_TASK_IDEAS", "TELEGRAM_TOPIC_TASK_READY",
+            "TELEGRAM_TOPIC_TASK_ACTIVE", "TELEGRAM_TOPIC_TASK_BLOCKED",
+            "TELEGRAM_TOPIC_BUGS_NEW", "TELEGRAM_TOPIC_BUGS_ACTIVE",
+            "TELEGRAM_TOPIC_NEEDS_INPUT", "TELEGRAM_TOPIC_RELEASES",
+            "TELEGRAM_TOPIC_AGENT_LOG", "TELEGRAM_TOPIC_DECISIONS",
+        ]
+        env = {**_os.environ}
+        for k in _BOARD_VARS:
+            env[k] = ""       # clear first so .env override=False won't restore
+        env.update(env_overrides)
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout
+
+    def test_command_exists_in_argparse(self):
+        import subprocess, sys, os as _os
+        result = subprocess.run(
+            [sys.executable, "run.py", "--help"],
+            capture_output=True, text=True,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("board-config", result.stdout)
+
+    def test_board_disabled_shown(self):
+        out = self._run({"TELEGRAM_BOARD_ENABLED": ""})
+        self.assertIn("enabled: false", out)
+
+    def test_board_enabled_shown(self):
+        out = self._run({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("enabled: true", out)
+
+    def test_chat_configured_true(self):
+        out = self._run({"TELEGRAM_BOARD_CHAT_ID": "-100123456"})
+        self.assertIn("board chat configured: true", out)
+
+    def test_chat_configured_false(self):
+        out = self._run({})
+        self.assertIn("board chat configured: false", out)
+
+    def test_topic_value_shown(self):
+        out = self._run({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100123",
+            "TELEGRAM_TOPIC_RELEASES": "29",
+        })
+        self.assertIn("releases: 29", out)
+
+    def test_all_topics_listed(self):
+        out = self._run({})
+        for label in ("task ideas", "task ready", "task active", "task blocked",
+                      "bugs new", "bugs active", "needs input",
+                      "releases", "agent log", "decisions"):
+            with self.subTest(label=label):
+                self.assertIn(label, out)
+
+    def test_missing_topics_listed_when_enabled(self):
+        out = self._run({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100123",
+            # all topics absent
+        })
+        self.assertIn("not fully configured", out)
+        self.assertIn("TELEGRAM_TOPIC_TASK_IDEAS", out)
+        self.assertIn("TELEGRAM_TOPIC_RELEASES", out)
+
+    def test_fully_configured_shows_check(self):
+        topic_env = {
+            "TELEGRAM_TOPIC_TASK_IDEAS": "1",
+            "TELEGRAM_TOPIC_TASK_READY": "2",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "3",
+            "TELEGRAM_TOPIC_TASK_BLOCKED": "4",
+            "TELEGRAM_TOPIC_BUGS_NEW": "5",
+            "TELEGRAM_TOPIC_BUGS_ACTIVE": "6",
+            "TELEGRAM_TOPIC_NEEDS_INPUT": "7",
+            "TELEGRAM_TOPIC_RELEASES": "8",
+            "TELEGRAM_TOPIC_AGENT_LOG": "9",
+            "TELEGRAM_TOPIC_DECISIONS": "10",
+        }
+        out = self._run({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100999",
+            **topic_env,
+        })
+        self.assertIn("✅", out)
+        self.assertIn("configured", out)
+        self.assertNotIn("Missing", out)
+
+    def test_does_not_print_bot_token(self):
+        import os as _os
+        token = _os.environ.get("TELEGRAM_BOT_TOKEN", "secret-tok-xyz")
+        out = self._run({"TELEGRAM_BOT_TOKEN": token})
+        self.assertNotIn(token, out)
+
+    def test_does_not_print_absolute_paths(self):
+        out = self._run({})
+        self.assertNotIn("/Users/", out)
+        self.assertNotIn("/home/", out)
+
+    def test_chat_id_value_not_printed(self):
+        out = self._run({"TELEGRAM_BOARD_CHAT_ID": "-1009876543210"})
+        self.assertNotIn("-1009876543210", out)
+
+    def test_not_set_label_when_topic_absent(self):
+        out = self._run({})
+        self.assertIn("not set", out)
+
+
 if __name__ == "__main__":
     unittest.main()

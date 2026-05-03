@@ -280,9 +280,19 @@ TELEGRAM_TOPIC_RELEASES=10              # число после последне
 ### Проверить конфигурацию
 
 ```bash
-/board_config    # в Telegram: показывает статус без секретов
-python3 run.py telegram-config   # в консоли: все флаги *_SET без значений
+# Отдельная Board-диагностика (показывает значения topic id, не показывает токены):
+python3 run.py board-config
+
+# В Telegram (приватный чат):
+/board_config
 ```
+
+**Разница между командами:**
+
+| Команда | Назначение | Показывает topic id? |
+|---|---|---|
+| `python3 run.py board-config` | Детальная Board-диагностика | ✅ да (не секрет) |
+| `python3 run.py telegram-config` | Общий Telegram-конфиг (CI/scripts) | ❌ только `_SET` флаги |
 
 Подробнее об архитектуре Board: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)
 
@@ -291,7 +301,8 @@ python3 run.py telegram-config   # в консоли: все флаги *_SET б
 ## Диагностика
 
 ```bash
-python3 run.py telegram-config   # показывает конфиг без секретов
+python3 run.py board-config      # детальная диагностика Telegram Board
+python3 run.py telegram-config   # общий Telegram-конфиг (только _SET флаги)
 python3 run.py doctor             # полная диагностика системы
 python3 run.py config             # конфиг LLM-провайдера
 ```

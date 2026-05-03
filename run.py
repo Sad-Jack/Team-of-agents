@@ -658,6 +658,71 @@ def cmd_telegram_config(_args):
     print(f"STT_CUSTOM_COMMAND_SET={str(bool((os.getenv('STT_CUSTOM_COMMAND') or '').strip())).lower()}")
 
 
+def cmd_board_config(_args):
+    """Human-readable Telegram Board diagnostics.
+
+    Shows topic IDs (not secrets) and SET flags for chat_id.
+    Does not print TELEGRAM_BOT_TOKEN or absolute paths.
+    """
+    _TOPIC_KEYS = [
+        ("task_ideas",   "TELEGRAM_TOPIC_TASK_IDEAS",   "task ideas"),
+        ("task_ready",   "TELEGRAM_TOPIC_TASK_READY",   "task ready"),
+        ("task_active",  "TELEGRAM_TOPIC_TASK_ACTIVE",  "task active"),
+        ("task_blocked", "TELEGRAM_TOPIC_TASK_BLOCKED", "task blocked"),
+        ("bugs_new",     "TELEGRAM_TOPIC_BUGS_NEW",     "bugs new"),
+        ("bugs_active",  "TELEGRAM_TOPIC_BUGS_ACTIVE",  "bugs active"),
+        ("needs_input",  "TELEGRAM_TOPIC_NEEDS_INPUT",  "needs input"),
+        ("releases",     "TELEGRAM_TOPIC_RELEASES",     "releases"),
+        ("agent_log",    "TELEGRAM_TOPIC_AGENT_LOG",    "agent log"),
+        ("decisions",    "TELEGRAM_TOPIC_DECISIONS",    "decisions"),
+    ]
+
+    enabled = (os.getenv("TELEGRAM_BOARD_ENABLED") or "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    chat_id_set = bool((os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip())
+
+    print("Telegram Board configuration:")
+    print(f"- enabled: {str(enabled).lower()}")
+    print(f"- board chat configured: {str(chat_id_set).lower()}")
+    print()
+    print("Topics:")
+
+    missing: list[str] = []
+    if not chat_id_set:
+        missing.append("TELEGRAM_BOARD_CHAT_ID")
+
+    for _key, env_name, label in _TOPIC_KEYS:
+        raw = (os.getenv(env_name) or "").strip()
+        if raw:
+            # topic ids are not secrets — show the value
+            try:
+                tid = int(raw)
+                print(f"- {label}: {tid}")
+            except ValueError:
+                print(f"- {label}: (invalid: {raw!r})")
+                missing.append(env_name)
+        else:
+            print(f"- {label}: (not set)")
+            missing.append(env_name)
+
+    print()
+    print("Status:")
+    if enabled and not missing:
+        print("✅ Telegram Board is configured")
+    elif not enabled:
+        print("❌ Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
+        if missing:
+            print("Missing:")
+            for m in missing:
+                print(f"- {m}")
+    else:
+        print("❌ Telegram Board is not fully configured")
+        print("Missing:")
+        for m in missing:
+            print(f"- {m}")
+
+
 def cmd_managed_project(_args):
     info = validate_managed_repo_path()
     print("Управляемый проект:")
@@ -1906,6 +1971,9 @@ def build_parser():
 
     telegram_cfg_parser = subparsers.add_parser("telegram-config", help="Show Telegram bot config presence")
     telegram_cfg_parser.set_defaults(func=cmd_telegram_config)
+
+    board_cfg_parser = subparsers.add_parser("board-config", help="Show Telegram Board diagnostics")
+    board_cfg_parser.set_defaults(func=cmd_board_config)
 
     telegram_parser = subparsers.add_parser("telegram", help="Run Telegram bot in polling mode")
     telegram_parser.set_defaults(func=cmd_telegram)
