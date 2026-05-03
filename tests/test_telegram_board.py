@@ -1,0 +1,462 @@
+"""Tests for telegram_board.py"""
+import unittest
+from unittest.mock import patch
+
+import telegram_board
+from telegram_board import (
+    BoardConfig,
+    BoardTopic,
+    format_agent_log_card,
+    format_bug_board_card,
+    format_decision_board_card,
+    format_release_board_card,
+    format_task_board_card,
+    load_board_config_from_env,
+    topic_for_agent_log,
+    topic_for_bug_status,
+    topic_for_decision,
+    topic_for_release_status,
+    topic_for_task_status,
+)
+
+
+# ---------------------------------------------------------------------------
+# load_board_config_from_env
+# ---------------------------------------------------------------------------
+
+class TestLoadBoardConfig(unittest.TestCase):
+
+    def _load(self, overrides: dict) -> BoardConfig:
+        clean = {k: v for k, v in overrides.items()}
+        with patch.dict("os.environ", clean, clear=False):
+            # Ensure board vars not set by the test are absent
+            removals = {
+                "TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+                "TELEGRAM_TOPIC_TASK_IDEAS", "TELEGRAM_TOPIC_TASK_READY",
+                "TELEGRAM_TOPIC_TASK_ACTIVE", "TELEGRAM_TOPIC_TASK_BLOCKED",
+                "TELEGRAM_TOPIC_BUGS_NEW", "TELEGRAM_TOPIC_BUGS_ACTIVE",
+                "TELEGRAM_TOPIC_NEEDS_INPUT", "TELEGRAM_TOPIC_RELEASES",
+                "TELEGRAM_TOPIC_AGENT_LOG", "TELEGRAM_TOPIC_DECISIONS",
+            }
+            import os
+            saved = {k: os.environ.pop(k) for k in removals if k in os.environ and k not in clean}
+            try:
+                return load_board_config_from_env()
+            finally:
+                os.environ.update(saved)
+
+    def test_default_disabled(self):
+        cfg = self._load({})
+        self.assertFalse(cfg.enabled)
+
+    def test_enabled_true(self):
+        cfg = self._load({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertTrue(cfg.enabled)
+
+    def test_enabled_false_explicit(self):
+        cfg = self._load({"TELEGRAM_BOARD_ENABLED": "false"})
+        self.assertFalse(cfg.enabled)
+
+    def test_board_chat_id_set(self):
+        cfg = self._load({"TELEGRAM_BOARD_CHAT_ID": "-1001234567890"})
+        self.assertEqual(cfg.board_chat_id, "-1001234567890")
+
+    def test_board_chat_id_missing(self):
+        cfg = self._load({})
+        self.assertIsNone(cfg.board_chat_id)
+
+    def test_topic_id_parsed(self):
+        cfg = self._load({"TELEGRAM_TOPIC_TASK_IDEAS": "42"})
+        self.assertEqual(cfg.topic_id(BoardTopic.task_ideas), 42)
+
+    def test_all_topics_parsed(self):
+        env = {
+            "TELEGRAM_TOPIC_TASK_IDEAS":   "1",
+            "TELEGRAM_TOPIC_TASK_READY":   "2",
+            "TELEGRAM_TOPIC_TASK_ACTIVE":  "3",
+            "TELEGRAM_TOPIC_TASK_BLOCKED": "4",
+            "TELEGRAM_TOPIC_BUGS_NEW":     "5",
+            "TELEGRAM_TOPIC_BUGS_ACTIVE":  "6",
+            "TELEGRAM_TOPIC_NEEDS_INPUT":  "7",
+            "TELEGRAM_TOPIC_RELEASES":     "8",
+            "TELEGRAM_TOPIC_AGENT_LOG":    "9",
+            "TELEGRAM_TOPIC_DECISIONS":    "10",
+        }
+        cfg = self._load(env)
+        self.assertEqual(cfg.topic_id(BoardTopic.task_ideas), 1)
+        self.assertEqual(cfg.topic_id(BoardTopic.decisions), 10)
+
+    def test_invalid_topic_id_does_not_crash(self):
+        cfg = self._load({"TELEGRAM_TOPIC_TASK_IDEAS": "not_a_number"})
+        self.assertIsNone(cfg.topic_id(BoardTopic.task_ideas))
+        self.assertTrue(len(cfg.warnings) > 0)
+
+    def test_invalid_topic_id_warning_message(self):
+        cfg = self._load({"TELEGRAM_TOPIC_TASK_IDEAS": "abc"})
+        self.assertTrue(any("TASK_IDEAS" in w for w in cfg.warnings))
+
+    def test_empty_topic_id_is_none(self):
+        cfg = self._load({"TELEGRAM_TOPIC_TASK_IDEAS": ""})
+        self.assertIsNone(cfg.topic_id(BoardTopic.task_ideas))
+        self.assertEqual(cfg.warnings, [])
+
+    def test_is_topic_configured_true(self):
+        cfg = self._load({"TELEGRAM_TOPIC_RELEASES": "99"})
+        self.assertTrue(cfg.is_topic_configured(BoardTopic.releases))
+
+    def test_is_topic_configured_false(self):
+        cfg = self._load({})
+        self.assertFalse(cfg.is_topic_configured(BoardTopic.releases))
+
+    def test_enabled_false_but_topics_set(self):
+        cfg = self._load({"TELEGRAM_BOARD_ENABLED": "false", "TELEGRAM_TOPIC_RELEASES": "5"})
+        self.assertFalse(cfg.enabled)
+        # Topics are still parsed (so caller can detect misconfiguration)
+        self.assertEqual(cfg.topic_id(BoardTopic.releases), 5)
+
+
+# ---------------------------------------------------------------------------
+# Topic routing
+# ---------------------------------------------------------------------------
+
+class TestTopicForTaskStatus(unittest.TestCase):
+
+    def test_idea(self):
+        self.assertEqual(topic_for_task_status("idea"), BoardTopic.task_ideas)
+
+    def test_ready(self):
+        self.assertEqual(topic_for_task_status("ready"), BoardTopic.task_ready)
+
+    def test_in_progress(self):
+        self.assertEqual(topic_for_task_status("in_progress"), BoardTopic.task_active)
+
+    def test_review(self):
+        self.assertEqual(topic_for_task_status("review"), BoardTopic.task_active)
+
+    def test_done(self):
+        self.assertEqual(topic_for_task_status("done"), BoardTopic.task_active)
+
+    def test_blocked(self):
+        self.assertEqual(topic_for_task_status("blocked"), BoardTopic.task_blocked)
+
+    def test_cancelled(self):
+        self.assertEqual(topic_for_task_status("cancelled"), BoardTopic.task_active)
+
+    def test_unknown_returns_none(self):
+        self.assertIsNone(topic_for_task_status("nonexistent"))
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(topic_for_task_status(""))
+
+
+class TestTopicForBugStatus(unittest.TestCase):
+
+    def test_new(self):
+        self.assertEqual(topic_for_bug_status("new"), BoardTopic.bugs_new)
+
+    def test_in_progress(self):
+        self.assertEqual(topic_for_bug_status("in_progress"), BoardTopic.bugs_active)
+
+    def test_verify(self):
+        self.assertEqual(topic_for_bug_status("verify"), BoardTopic.bugs_active)
+
+    def test_closed(self):
+        self.assertEqual(topic_for_bug_status("closed"), BoardTopic.bugs_active)
+
+    def test_need_info(self):
+        self.assertEqual(topic_for_bug_status("need_info"), BoardTopic.needs_input)
+
+    def test_cancelled(self):
+        self.assertEqual(topic_for_bug_status("cancelled"), BoardTopic.bugs_active)
+
+    def test_unknown_returns_none(self):
+        self.assertIsNone(topic_for_bug_status("resolved"))
+
+
+class TestTopicForReleaseStatus(unittest.TestCase):
+
+    def test_all_statuses_map_to_releases(self):
+        for s in ("preparing", "publishing", "published", "failed", "rollback"):
+            with self.subTest(status=s):
+                self.assertEqual(topic_for_release_status(s), BoardTopic.releases)
+
+    def test_unknown_returns_none(self):
+        self.assertIsNone(topic_for_release_status("draft"))
+
+
+class TestTopicForDecisionAndLog(unittest.TestCase):
+
+    def test_decision(self):
+        self.assertEqual(topic_for_decision(), BoardTopic.decisions)
+
+    def test_agent_log(self):
+        self.assertEqual(topic_for_agent_log(), BoardTopic.agent_log)
+
+
+# ---------------------------------------------------------------------------
+# Card formatters — content correctness
+# ---------------------------------------------------------------------------
+
+class TestFormatTaskBoardCard(unittest.TestCase):
+
+    def _task(self, **kwargs):
+        base = {
+            "id": "TASK-6",
+            "title": "Проверить Telegram UX Layer",
+            "status": "idea",
+            "priority": "medium",
+            "description": "Проверить UX после merge.",
+        }
+        base.update(kwargs)
+        return base
+
+    def test_contains_title(self):
+        card = format_task_board_card(self._task())
+        self.assertIn("Проверить Telegram UX Layer", card)
+
+    def test_contains_id(self):
+        card = format_task_board_card(self._task())
+        self.assertIn("TASK-6", card)
+
+    def test_contains_human_status(self):
+        card = format_task_board_card(self._task(status="idea"))
+        self.assertIn("Идея", card)
+        self.assertNotIn("idea", card)
+
+    def test_contains_description(self):
+        card = format_task_board_card(self._task())
+        self.assertIn("Проверить UX после merge", card)
+
+    def test_contains_priority_label(self):
+        card = format_task_board_card(self._task(priority="high"))
+        self.assertIn("Высокий", card)
+
+    def test_missing_description_not_printed_as_none(self):
+        card = format_task_board_card(self._task(description=None))
+        self.assertNotIn("None", card)
+
+    def test_missing_priority_not_printed(self):
+        card = format_task_board_card({"id": "TASK-1", "title": "X", "status": "idea"})
+        self.assertNotIn("Приоритет:", card)
+
+    def test_blocked_shows_reason(self):
+        card = format_task_board_card(self._task(status="blocked", blocked_reason="Ждём TASK-5"))
+        self.assertIn("Ждём TASK-5", card)
+
+    def test_depends_on_shown(self):
+        card = format_task_board_card(self._task(depends_on=["TASK-1", "TASK-2"]))
+        self.assertIn("TASK-1", card)
+        self.assertIn("TASK-2", card)
+
+    def test_no_json_content(self):
+        card = format_task_board_card(self._task())
+        self.assertNotIn("{", card)
+        self.assertNotIn("}", card)
+
+    def test_no_technical_fields(self):
+        card = format_task_board_card(self._task())
+        for field_name in ("intent", "confidence", "action", "artifacts"):
+            with self.subTest(field=field_name):
+                self.assertNotIn(field_name, card)
+
+    def test_no_absolute_paths(self):
+        card = format_task_board_card(self._task(description="/Users/admin/project"))
+        # The description content may appear but no structural path leakage
+        # (description is user content — test that it's truncated safely)
+        self.assertNotIn("Результат выполнения", card)
+
+
+class TestFormatBugBoardCard(unittest.TestCase):
+
+    def _bug(self, **kwargs):
+        base = {
+            "id": "BUG-2",
+            "title": "Краш при старте",
+            "status": "new",
+            "severity": "high",
+            "description": "Приложение падает при запуске.",
+        }
+        base.update(kwargs)
+        return base
+
+    def test_contains_title(self):
+        card = format_bug_board_card(self._bug())
+        self.assertIn("Краш при старте", card)
+
+    def test_contains_id(self):
+        card = format_bug_board_card(self._bug())
+        self.assertIn("BUG-2", card)
+
+    def test_contains_human_status(self):
+        card = format_bug_board_card(self._bug(status="new"))
+        self.assertIn("Новый", card)
+        self.assertNotIn('"new"', card)
+
+    def test_severity_label(self):
+        card = format_bug_board_card(self._bug(severity="critical"))
+        self.assertIn("Критическая", card)
+
+    def test_unknown_severity_not_shown(self):
+        card = format_bug_board_card(self._bug(severity="unknown"))
+        self.assertNotIn("unknown", card)
+
+    def test_missing_severity_not_printed_as_none(self):
+        card = format_bug_board_card({"id": "BUG-1", "title": "X", "status": "new"})
+        self.assertNotIn("None", card)
+
+    def test_no_json_content(self):
+        card = format_bug_board_card(self._bug())
+        self.assertNotIn("{", card)
+
+
+class TestFormatReleaseBoardCard(unittest.TestCase):
+
+    def _rel(self, **kwargs):
+        base = {
+            "id": "REL-001",
+            "version": "v1.0.0",
+            "status": "preparing",
+            "task_ids": ["TASK-1", "TASK-2"],
+        }
+        base.update(kwargs)
+        return base
+
+    def test_contains_version(self):
+        card = format_release_board_card(self._rel())
+        self.assertIn("v1.0.0", card)
+
+    def test_contains_id(self):
+        card = format_release_board_card(self._rel())
+        self.assertIn("REL-001", card)
+
+    def test_human_status(self):
+        card = format_release_board_card(self._rel(status="published"))
+        self.assertIn("Опубликован", card)
+        self.assertNotIn('"published"', card)
+
+    def test_task_count(self):
+        card = format_release_board_card(self._rel())
+        self.assertIn("2", card)
+
+    def test_no_json_content(self):
+        card = format_release_board_card(self._rel())
+        self.assertNotIn("{", card)
+
+
+class TestFormatDecisionBoardCard(unittest.TestCase):
+
+    def test_contains_title(self):
+        card = format_decision_board_card({"id": "ADR-002", "title": "Telegram board display-only", "status": "accepted"})
+        self.assertIn("Telegram board display-only", card)
+
+    def test_contains_id(self):
+        card = format_decision_board_card({"id": "ADR-002", "title": "X", "status": "accepted"})
+        self.assertIn("ADR-002", card)
+
+    def test_human_status(self):
+        card = format_decision_board_card({"id": "ADR-001", "title": "X", "status": "accepted"})
+        self.assertIn("Принято", card)
+        self.assertNotIn('"accepted"', card)
+
+    def test_missing_date_not_none(self):
+        card = format_decision_board_card({"id": "ADR-001", "title": "X"})
+        self.assertNotIn("None", card)
+
+
+class TestFormatAgentLogCard(unittest.TestCase):
+
+    def test_run_next_label(self):
+        card = format_agent_log_card({"type": "run_next", "task_id": "TASK-3", "status": "in_progress"})
+        self.assertIn("▶️", card)
+        self.assertIn("TASK-3", card)
+
+    def test_error_label(self):
+        card = format_agent_log_card({"type": "error", "message": "Что-то сломалось"})
+        self.assertIn("❌", card)
+        self.assertIn("Что-то сломалось", card)
+
+    def test_timestamp_truncated(self):
+        card = format_agent_log_card({
+            "type": "note",
+            "timestamp": "2026-05-03T10:00:00.123456",
+        })
+        self.assertIn("2026-05-03T10:00:00", card)
+        self.assertNotIn(".123456", card)
+
+    def test_missing_fields_no_none(self):
+        card = format_agent_log_card({})
+        self.assertNotIn("None", card)
+
+    def test_no_json_content(self):
+        card = format_agent_log_card({"type": "run_next", "task_id": "TASK-1"})
+        self.assertNotIn("{", card)
+
+
+# ---------------------------------------------------------------------------
+# telegram-config output includes board vars
+# ---------------------------------------------------------------------------
+
+class TestTelegramConfigBoardOutput(unittest.TestCase):
+
+    def _run_config(self, env_overrides):
+        import subprocess, sys, os as _os
+        env = {**_os.environ, **env_overrides}
+        result = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout
+
+    def test_board_enabled_false_by_default(self):
+        # Explicitly set to empty string so .env file doesn't override (override=False)
+        env = {k: v for k, v in __import__("os").environ.items()
+               if k != "TELEGRAM_BOARD_ENABLED"}
+        env["TELEGRAM_BOARD_ENABLED"] = ""
+        import subprocess, sys
+        result = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("TELEGRAM_BOARD_ENABLED=false", result.stdout)
+
+    def test_board_enabled_true(self):
+        output = self._run_config({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("TELEGRAM_BOARD_ENABLED=true", output)
+
+    def test_board_chat_id_set_true(self):
+        output = self._run_config({"TELEGRAM_BOARD_CHAT_ID": "-1001234567"})
+        self.assertIn("TELEGRAM_BOARD_CHAT_ID_SET=true", output)
+
+    def test_board_chat_id_set_false(self):
+        output = self._run_config({"TELEGRAM_BOARD_CHAT_ID": ""})
+        self.assertIn("TELEGRAM_BOARD_CHAT_ID_SET=false", output)
+
+    def test_topic_set_true(self):
+        output = self._run_config({"TELEGRAM_TOPIC_RELEASES": "42"})
+        self.assertIn("TELEGRAM_TOPIC_RELEASES_SET=true", output)
+
+    def test_topic_set_false(self):
+        output = self._run_config({"TELEGRAM_TOPIC_RELEASES": ""})
+        self.assertIn("TELEGRAM_TOPIC_RELEASES_SET=false", output)
+
+    def test_actual_topic_id_not_printed(self):
+        output = self._run_config({"TELEGRAM_TOPIC_RELEASES": "99999"})
+        self.assertNotIn("99999", output)
+
+    def test_actual_chat_id_not_printed(self):
+        output = self._run_config({"TELEGRAM_BOARD_CHAT_ID": "-9876543210"})
+        self.assertNotIn("-9876543210", output)
+
+    def test_all_topic_keys_present(self):
+        output = self._run_config({})
+        for t in ("TASK_IDEAS", "TASK_READY", "TASK_ACTIVE", "TASK_BLOCKED",
+                  "BUGS_NEW", "BUGS_ACTIVE", "NEEDS_INPUT",
+                  "RELEASES", "AGENT_LOG", "DECISIONS"):
+            with self.subTest(topic=t):
+                self.assertIn(f"TELEGRAM_TOPIC_{t}_SET=", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

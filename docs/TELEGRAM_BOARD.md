@@ -165,6 +165,63 @@ Telegram-доска является только отображением. Эт
 
 ---
 
+## Переменные окружения
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `TELEGRAM_BOARD_ENABLED` | `false` | Включить Board-интеграцию |
+| `TELEGRAM_BOARD_CHAT_ID` | — | ID форум-группы (отрицательное число для групп) |
+| `TELEGRAM_TOPIC_TASK_IDEAS` | — | message_thread_id топика Ideas |
+| `TELEGRAM_TOPIC_TASK_READY` | — | message_thread_id топика Ready |
+| `TELEGRAM_TOPIC_TASK_ACTIVE` | — | message_thread_id топика Active |
+| `TELEGRAM_TOPIC_TASK_BLOCKED` | — | message_thread_id топика Blocked |
+| `TELEGRAM_TOPIC_BUGS_NEW` | — | message_thread_id топика Bugs · New |
+| `TELEGRAM_TOPIC_BUGS_ACTIVE` | — | message_thread_id топика Bugs · Active |
+| `TELEGRAM_TOPIC_NEEDS_INPUT` | — | message_thread_id топика Needs Input |
+| `TELEGRAM_TOPIC_RELEASES` | — | message_thread_id топика Releases |
+| `TELEGRAM_TOPIC_AGENT_LOG` | — | message_thread_id топика Agent Log |
+| `TELEGRAM_TOPIC_DECISIONS` | — | message_thread_id топика Decisions |
+
+Незаданные топики молча пропускаются — приложение не падает при отсутствии topic id.
+Невалидные значения (не целое число) генерируют предупреждение в логах.
+
+---
+
+## Маппинг статусов → топики
+
+### Задачи
+
+| Статус задачи | Топик Board |
+|---|---|
+| `idea` | `task_ideas` |
+| `ready` | `task_ready` |
+| `in_progress` | `task_active` |
+| `review` | `task_active` |
+| `done` | `task_active` |
+| `blocked` | `task_blocked` |
+| `cancelled` | `task_active` |
+
+### Баги
+
+| Статус бага | Топик Board |
+|---|---|
+| `new` | `bugs_new` |
+| `in_progress` | `bugs_active` |
+| `verify` | `bugs_active` |
+| `closed` | `bugs_active` |
+| `need_info` | `needs_input` |
+| `cancelled` | `bugs_active` |
+
+### Релизы и другие
+
+| Тип | Топик Board |
+|---|---|
+| Любой релиз (`preparing`, `publishing`, `published`, `failed`, `rollback`) | `releases` |
+| ADR / решение | `decisions` |
+| Событие агента | `agent_log` |
+
+---
+
 ## Настройка forum-группы
 
 1. Создай forum-группу в Telegram через **New Group → Enable Topics**.
@@ -173,7 +230,10 @@ Telegram-доска является только отображением. Эт
 4. Укажи в `.env`:
 
 ```env
+TELEGRAM_BOARD_ENABLED=true
 TELEGRAM_BOARD_CHAT_ID=<id форум-группы>
+TELEGRAM_TOPIC_TASK_IDEAS=<message_thread_id>
+# ... остальные топики
 ```
 
 Получить chat id форум-группы:
@@ -181,7 +241,27 @@ TELEGRAM_BOARD_CHAT_ID=<id форум-группы>
   `https://api.telegram.org/bot<TOKEN>/getUpdates`
 - Найди `"chat":{"id":...}` — это id (у групп отрицательный).
 
+Получить message_thread_id топика:
+- Открой нужный топик и перешли любое сообщение из него в `@userinfobot` или
+  посмотри `message_thread_id` в ответе `getUpdates` при отправке сообщения в топик.
+
 ---
+
+## Что реализовано сейчас (foundation layer)
+
+Модуль `telegram_board.py` реализует фундаментный слой:
+
+- `BoardTopic` — enum из 10 слотов топиков.
+- `BoardConfig` — dataclass с topic id mapping, safe parsing из env.
+- `load_board_config_from_env()` — читает все `TELEGRAM_BOARD_*` переменные.
+  Невалидные topic id → предупреждение в логах, не падает.
+- Роутинг-функции: `topic_for_task_status()`, `topic_for_bug_status()`,
+  `topic_for_release_status()`, `topic_for_decision()`, `topic_for_agent_log()`.
+- Форматтеры карточек: `format_task_board_card()`, `format_bug_board_card()`,
+  `format_release_board_card()`, `format_decision_board_card()`, `format_agent_log_card()`.
+
+**Telegram-публикация намеренно отсутствует в этом модуле.**
+Модуль — чистый слой конфигурации и форматирования, без I/O.
 
 ## Ограничения текущей реализации (v1)
 
@@ -192,6 +272,8 @@ TELEGRAM_BOARD_CHAT_ID=<id форум-группы>
 
 Документ фиксирует **архитектурное решение** и **целевую модель**,
 а не текущее runtime-состояние.
+
+Источник истины всегда — **локальное хранилище**, не Telegram.
 
 ---
 

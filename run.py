@@ -628,11 +628,25 @@ def cmd_telegram_config(_args):
     fast_router_enabled = (os.getenv("TELEGRAM_FAST_ROUTER_ENABLED") or "true").strip().lower() in {
         "1", "true", "yes", "y", "on"
     }
+    board_enabled = (os.getenv("TELEGRAM_BOARD_ENABLED") or "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    board_chat_set = bool((os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip())
     print(f"TELEGRAM_BOT_TOKEN_SET={str(token_set).lower()}")
     print(f"TELEGRAM_OWNER_ID_SET={str(owner_set).lower()}")
     print(f"TELEGRAM_DRY_RUN_BY_DEFAULT={str(dry_run_default).lower()}")
     print(f"TELEGRAM_STATUS_CHAT_ID_SET={str(status_chat_set).lower()}")
     print(f"TELEGRAM_FAST_ROUTER_ENABLED={str(fast_router_enabled).lower()}")
+    print(f"TELEGRAM_BOARD_ENABLED={str(board_enabled).lower()}")
+    print(f"TELEGRAM_BOARD_CHAT_ID_SET={str(board_chat_set).lower()}")
+    _board_topics = [
+        "TASK_IDEAS", "TASK_READY", "TASK_ACTIVE", "TASK_BLOCKED",
+        "BUGS_NEW", "BUGS_ACTIVE", "NEEDS_INPUT",
+        "RELEASES", "AGENT_LOG", "DECISIONS",
+    ]
+    for _t in _board_topics:
+        _set = bool((os.getenv(f"TELEGRAM_TOPIC_{_t}") or "").strip())
+        print(f"TELEGRAM_TOPIC_{_t}_SET={str(_set).lower()}")
     print(f"STT_PROVIDER={(os.getenv('STT_PROVIDER') or 'disabled').strip().lower()}")
     print(f"FFMPEG_BINARY={(os.getenv('FFMPEG_BINARY') or 'ffmpeg').strip() or 'ffmpeg'}")
     print(f"VOICE_WORK_DIR={(os.getenv('VOICE_WORK_DIR') or '.tmp/voice').strip() or '.tmp/voice'}")

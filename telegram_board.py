@@ -1,0 +1,399 @@
+"""
+Telegram Board — foundation layer.
+
+Provides:
+  - BoardTopic enum (topic slots in the forum-group board)
+  - BoardConfig dataclass with topic id mapping
+  - load_board_config_from_env() — reads TELEGRAM_BOARD_* env vars
+  - topic_for_* routing helpers
+  - Human-readable card formatters (pure functions, no I/O)
+
+No Telegram posting is performed here.
+No inline buttons.
+No reply-to routing.
+Local storage is the source of truth; this module only formats and maps.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Topic slots
+# ---------------------------------------------------------------------------
+
+class BoardTopic(Enum):
+    task_ideas   = "task_ideas"
+    task_ready   = "task_ready"
+    task_active  = "task_active"
+    task_blocked = "task_blocked"
+    bugs_new     = "bugs_new"
+    bugs_active  = "bugs_active"
+    needs_input  = "needs_input"
+    releases     = "releases"
+    agent_log    = "agent_log"
+    decisions    = "decisions"
+
+
+# ---------------------------------------------------------------------------
+# Board config
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BoardConfig:
+    enabled: bool = False
+    board_chat_id: Optional[str] = None
+    # topic slot -> Telegram message_thread_id (int) or None if not configured
+    topic_ids: dict[BoardTopic, Optional[int]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+    def topic_id(self, topic: BoardTopic) -> Optional[int]:
+        """Return the message_thread_id for a topic, or None if not set."""
+        return self.topic_ids.get(topic)
+
+    def is_topic_configured(self, topic: BoardTopic) -> bool:
+        return self.topic_ids.get(topic) is not None
+
+
+# Env-var name for each topic slot
+_TOPIC_ENV: dict[BoardTopic, str] = {
+    BoardTopic.task_ideas:   "TELEGRAM_TOPIC_TASK_IDEAS",
+    BoardTopic.task_ready:   "TELEGRAM_TOPIC_TASK_READY",
+    BoardTopic.task_active:  "TELEGRAM_TOPIC_TASK_ACTIVE",
+    BoardTopic.task_blocked: "TELEGRAM_TOPIC_TASK_BLOCKED",
+    BoardTopic.bugs_new:     "TELEGRAM_TOPIC_BUGS_NEW",
+    BoardTopic.bugs_active:  "TELEGRAM_TOPIC_BUGS_ACTIVE",
+    BoardTopic.needs_input:  "TELEGRAM_TOPIC_NEEDS_INPUT",
+    BoardTopic.releases:     "TELEGRAM_TOPIC_RELEASES",
+    BoardTopic.agent_log:    "TELEGRAM_TOPIC_AGENT_LOG",
+    BoardTopic.decisions:    "TELEGRAM_TOPIC_DECISIONS",
+}
+
+
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_topic_id(raw: str | None, env_name: str) -> tuple[Optional[int], Optional[str]]:
+    """
+    Parse a topic id string into int.
+    Returns (int_id, None) on success, (None, warning_message) on parse failure,
+    (None, None) when raw is empty/missing.
+    """
+    if not raw or not raw.strip():
+        return None, None
+    try:
+        return int(raw.strip()), None
+    except ValueError:
+        return None, f"{env_name}={raw!r} is not a valid integer topic id — ignored"
+
+
+def load_board_config_from_env() -> BoardConfig:
+    """
+    Read all TELEGRAM_BOARD_* variables from the environment and return a BoardConfig.
+
+    Rules:
+    - TELEGRAM_BOARD_ENABLED defaults to false.
+    - Invalid (non-integer) topic ids produce a warning and are skipped; app does not crash.
+    - No secret values are stored beyond board_chat_id (which is never printed).
+    """
+    enabled = _parse_bool(os.getenv("TELEGRAM_BOARD_ENABLED"), default=False)
+    board_chat_id = (os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip() or None
+
+    warnings: list[str] = []
+    topic_ids: dict[BoardTopic, Optional[int]] = {}
+
+    for topic, env_name in _TOPIC_ENV.items():
+        raw = os.getenv(env_name)
+        tid, warn = _parse_topic_id(raw, env_name)
+        topic_ids[topic] = tid
+        if warn:
+            warnings.append(warn)
+            logging.warning("telegram_board: %s", warn)
+
+    cfg = BoardConfig(
+        enabled=enabled,
+        board_chat_id=board_chat_id,
+        topic_ids=topic_ids,
+        warnings=warnings,
+    )
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Topic routing helpers
+# ---------------------------------------------------------------------------
+
+_TASK_STATUS_MAP: dict[str, BoardTopic] = {
+    "idea":        BoardTopic.task_ideas,
+    "ready":       BoardTopic.task_ready,
+    "in_progress": BoardTopic.task_active,
+    "review":      BoardTopic.task_active,
+    "done":        BoardTopic.task_active,
+    "blocked":     BoardTopic.task_blocked,
+    "cancelled":   BoardTopic.task_active,
+}
+
+_BUG_STATUS_MAP: dict[str, BoardTopic] = {
+    "new":         BoardTopic.bugs_new,
+    "in_progress": BoardTopic.bugs_active,
+    "verify":      BoardTopic.bugs_active,
+    "closed":      BoardTopic.bugs_active,
+    "need_info":   BoardTopic.needs_input,
+    "cancelled":   BoardTopic.bugs_active,
+}
+
+_RELEASE_STATUS_MAP: dict[str, BoardTopic] = {
+    "preparing":  BoardTopic.releases,
+    "publishing": BoardTopic.releases,
+    "published":  BoardTopic.releases,
+    "failed":     BoardTopic.releases,
+    "rollback":   BoardTopic.releases,
+}
+
+_TASK_STATUS_LABELS: dict[str, str] = {
+    "idea":        "Идея",
+    "ready":       "Готова к работе",
+    "in_progress": "В работе",
+    "review":      "На ревью",
+    "done":        "Готово",
+    "blocked":     "Заблокирована",
+    "cancelled":   "Отменена",
+}
+
+_BUG_STATUS_LABELS: dict[str, str] = {
+    "new":         "Новый",
+    "in_progress": "В работе",
+    "verify":      "На проверке",
+    "closed":      "Закрыт",
+    "need_info":   "Нужна информация",
+    "cancelled":   "Отменён",
+}
+
+_RELEASE_STATUS_LABELS: dict[str, str] = {
+    "preparing":  "Готовится",
+    "publishing": "Публикуется",
+    "published":  "Опубликован",
+    "failed":     "Ошибка",
+    "rollback":   "Откат",
+}
+
+
+def topic_for_task_status(status: str) -> Optional[BoardTopic]:
+    """Return the board topic for a given task status, or None if unknown."""
+    return _TASK_STATUS_MAP.get(status)
+
+
+def topic_for_bug_status(status: str) -> Optional[BoardTopic]:
+    """Return the board topic for a given bug status, or None if unknown."""
+    return _BUG_STATUS_MAP.get(status)
+
+
+def topic_for_release_status(status: str) -> Optional[BoardTopic]:
+    """Return the board topic for a given release status, or None if unknown."""
+    return _RELEASE_STATUS_MAP.get(status)
+
+
+def topic_for_decision() -> BoardTopic:
+    return BoardTopic.decisions
+
+
+def topic_for_agent_log() -> BoardTopic:
+    return BoardTopic.agent_log
+
+
+# ---------------------------------------------------------------------------
+# Card formatters — pure functions, no I/O, no secrets, no absolute paths
+# ---------------------------------------------------------------------------
+
+def _truncate(text: str, limit: int = 300) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
+
+
+def _priority_label(priority: str | None) -> str:
+    labels = {
+        "high":     "Высокий",
+        "medium":   "Средний",
+        "low":      "Низкий",
+        "critical": "Критический",
+    }
+    return labels.get((priority or "").lower(), str(priority or "").capitalize()) if priority else ""
+
+
+def format_task_board_card(task: dict) -> str:
+    """
+    Format a task dict as a human-readable board card (Russian).
+    No JSON, no technical fields, no absolute paths.
+    """
+    status_raw = task.get("status", "")
+    status_label = _TASK_STATUS_LABELS.get(status_raw, status_raw)
+
+    icons = {
+        "idea":        "💡",
+        "ready":       "✅",
+        "in_progress": "🚧",
+        "review":      "🔍",
+        "done":        "✔️",
+        "blocked":     "⛔",
+        "cancelled":   "❌",
+    }
+    icon = icons.get(status_raw, "🧩")
+
+    item_id = task.get("id", "")
+    title = task.get("title", "")
+    priority = task.get("priority", "")
+    description = (task.get("description") or "").strip()
+
+    lines = [f"{icon} Задача: {title}"]
+    if item_id:
+        lines.append(f"ID: {item_id}")
+    lines.append(f"Статус: {status_label}")
+    if priority:
+        lines.append(f"Приоритет: {_priority_label(priority)}")
+
+    depends_on = task.get("depends_on") or []
+    if depends_on:
+        lines.append(f"Зависит от: {', '.join(depends_on)}")
+
+    blocked_reason = (task.get("blocked_reason") or "").strip()
+    if blocked_reason and status_raw == "blocked":
+        lines.append(f"Причина: {_truncate(blocked_reason, 150)}")
+
+    if description:
+        lines.append("")
+        lines.append("Что нужно сделать:")
+        lines.append(_truncate(description))
+
+    return "\n".join(lines)
+
+
+def format_bug_board_card(bug: dict) -> str:
+    """
+    Format a bug dict as a human-readable board card (Russian).
+    """
+    status_raw = bug.get("status", "")
+    status_label = _BUG_STATUS_LABELS.get(status_raw, status_raw)
+
+    item_id = bug.get("id", "")
+    title = bug.get("title", "")
+    severity = (bug.get("severity") or "").strip()
+    description = (bug.get("description") or "").strip()
+
+    sev_labels = {
+        "critical": "Критическая",
+        "high":     "Высокая",
+        "medium":   "Средняя",
+        "low":      "Низкая",
+    }
+
+    lines = [f"🐞 Баг: {title}"]
+    if item_id:
+        lines.append(f"ID: {item_id}")
+    lines.append(f"Статус: {status_label}")
+    if severity and severity.lower() not in {"unknown", ""}:
+        lines.append(f"Серьёзность: {sev_labels.get(severity.lower(), severity)}")
+
+    if description:
+        lines.append("")
+        lines.append("Описание:")
+        lines.append(_truncate(description))
+
+    return "\n".join(lines)
+
+
+def format_release_board_card(release: dict) -> str:
+    """
+    Format a release dict as a human-readable board card (Russian).
+    """
+    status_raw = release.get("status", "")
+    status_label = _RELEASE_STATUS_LABELS.get(status_raw, status_raw)
+
+    release_id = release.get("id", "")
+    version = (release.get("version") or release.get("name") or "").strip()
+    task_ids = release.get("task_ids") or []
+    notes = (release.get("notes") or "").strip()
+
+    lines = ["🚀 Релиз"]
+    if version:
+        lines[0] = f"🚀 Релиз: {version}"
+    if release_id:
+        lines.append(f"ID: {release_id}")
+    lines.append(f"Статус: {status_label}")
+    if task_ids:
+        lines.append(f"Задач: {len(task_ids)}")
+    if notes:
+        lines.append("")
+        lines.append(_truncate(notes))
+
+    return "\n".join(lines)
+
+
+def format_decision_board_card(decision: dict) -> str:
+    """
+    Format an ADR/decision dict as a human-readable board card (Russian).
+    """
+    decision_id = decision.get("id", "")
+    title = decision.get("title", "")
+    status = (decision.get("status") or "").strip()
+    date = (decision.get("date") or "").strip()
+
+    status_labels = {
+        "accepted":    "Принято",
+        "proposed":    "На рассмотрении",
+        "deprecated":  "Устарело",
+        "superseded":  "Заменено",
+        "rejected":    "Отклонено",
+    }
+    status_label = status_labels.get(status.lower(), status) if status else ""
+
+    lines = [f"📌 Решение: {title}"]
+    if decision_id:
+        lines.append(f"ID: {decision_id}")
+    if status_label:
+        lines.append(f"Статус: {status_label}")
+    if date:
+        lines.append(f"Дата: {date}")
+
+    return "\n".join(lines)
+
+
+def format_agent_log_card(event: dict) -> str:
+    """
+    Format an agent event as a human-readable log card (Russian).
+    """
+    event_type = (event.get("type") or event.get("event") or "событие").strip()
+    task_id = (event.get("task_id") or "").strip()
+    message = (event.get("message") or event.get("summary") or "").strip()
+    status = (event.get("status") or event.get("new_status") or "").strip()
+    timestamp = (event.get("timestamp") or event.get("created_at") or "").strip()
+
+    type_labels = {
+        "run_next":      "▶️ Шаг выполнен",
+        "advance":       "⏩ Задача продвинута",
+        "error":         "❌ Ошибка",
+        "status_change": "🔄 Смена статуса",
+        "created":       "🆕 Создано",
+        "note":          "📝 Заметка",
+    }
+    label = type_labels.get(event_type, f"📋 {event_type}")
+
+    lines = [label]
+    if task_id:
+        lines.append(f"Задача: {task_id}")
+    if status:
+        lines.append(f"Статус: {status}")
+    if message:
+        lines.append(_truncate(message, 200))
+    if timestamp:
+        lines.append(f"Время: {timestamp[:19]}")  # trim microseconds if present
+
+    return "\n".join(lines)
