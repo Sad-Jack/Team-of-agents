@@ -307,23 +307,33 @@ python3 run.py telegram-config     # общий Telegram-конфиг (толь�
 # Показать что будет отправлено, без вызова API:
 python3 run.py board-ping --dry-run
 
-# Реальный smoke-test (требует TELEGRAM_BOT_TOKEN + все Board vars):
+# Только один топик (dry-run):
+python3 run.py board-ping --topic agent_log --dry-run
+
+# Реальный smoke-test (требует TELEGRAM_BOT_TOKEN + Board vars):
 python3 run.py board-ping
+
+# Только один топик:
+python3 run.py board-ping --topic agent_log
 ```
 
-В Telegram:
-```
-/board_ping
-```
+В Telegram: `/board_ping`
 
-Команда отправляет `✅ ping: <Topic Name>` в каждый настроенный топик и возвращает итог:
+Результат:
 ```
 Telegram Board ping result:
 ✅ Task Ideas
 ✅ Task Ready
+⚠️ Agent Log — timeout: сообщение могло быть отправлено, проверь топик
 ❌ Task Active — Forbidden: bot is not a member
 — Needs Input (not configured)
 ```
+
+Доступные ключи для `--topic`: `task_ideas`, `task_ready`, `task_active`, `task_blocked`,
+`bugs_new`, `bugs_active`, `needs_input`, `releases`, `agent_log`, `decisions`.
+
+Таймаут управляется через `TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS` (по умолчанию 20 с).
+`⚠️ timeout` — не означает ошибку: сообщение могло дойти, нужно проверить топик.
 
 ### Важные правила Board
 

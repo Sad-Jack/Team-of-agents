@@ -293,23 +293,42 @@ python3 run.py board-config
 # Показать план без вызова API:
 python3 run.py board-ping --dry-run
 
+# Только один топик (dry-run):
+python3 run.py board-ping --topic agent_log --dry-run
+
 # Реальный smoke-test (требует TELEGRAM_BOT_TOKEN + Board vars):
 python3 run.py board-ping
+
+# Только один топик:
+python3 run.py board-ping --topic agent_log
 ```
 
-В Telegram:
-```
-/board_ping
-```
+В Telegram: `/board_ping`
 
-Smoke-test отправляет `✅ ping: <Topic Name>` в каждый настроенный топик и выводит:
+Результат smoke-test:
 ```
 Telegram Board ping result:
 ✅ Task Ideas
-✅ Releases
+⚠️ Agent Log — timeout: сообщение могло быть отправлено, проверь топик
 ❌ Task Active — Forbidden: bot is not a member
 — Needs Input (not configured)
 ```
+
+### Таймаут и ошибки
+
+| Символ | Статус | Значение |
+|---|---|---|
+| ✅ | ok | Сообщение доставлено |
+| ⚠️ | timeout | Клиент не получил ответ, но сообщение могло дойти |
+| ❌ | error | Жёсткая ошибка (Forbidden, Chat not found, Bad Request) |
+| — | missing | Топик не настроен в `.env` |
+
+Таймаут настраивается: `TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS=20` (по умолчанию 20 с).
+
+### Доступные ключи для --topic
+
+`task_ideas` · `task_ready` · `task_active` · `task_blocked` · `bugs_new` ·
+`bugs_active` · `needs_input` · `releases` · `agent_log` · `decisions`
 
 **Разница между командами:**
 
@@ -318,6 +337,7 @@ Telegram Board ping result:
 | `python3 run.py board-config` | Детальная Board-диагностика | ✅ да (не секрет) |
 | `python3 run.py board-ping --dry-run` | Smoke-test план без API | ✅ да |
 | `python3 run.py board-ping` | Реальный smoke-test | — результат |
+| `python3 run.py board-ping --topic KEY` | Smoke-test одного топика | — результат |
 | `python3 run.py telegram-config` | Общий Telegram-конфиг (CI) | ❌ только `_SET` |
 
 Подробнее об архитектуре Board: [TELEGRAM_BOARD.md](TELEGRAM_BOARD.md)

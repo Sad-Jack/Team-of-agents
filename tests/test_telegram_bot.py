@@ -1197,5 +1197,32 @@ class TestBoardPingHandler(unittest.TestCase):
         self.assertNotIn("/home/", text)
 
 
+    def test_board_ping_timeout_shows_warning_not_error(self):
+        """Timeout must produce ⚠️, not ❌, in the reply to owner."""
+        from unittest.mock import AsyncMock, MagicMock
+        import telegram_board as tb
+
+        class TimedOut(Exception):
+            pass
+
+        upd = _FakeUpdate(user_id="42", text="/board_ping")
+        ctx = self._make_ctx(owner_id="42")
+        ctx.bot.send_message = AsyncMock(side_effect=TimedOut("Timed out"))
+
+        env = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100xyz",
+            "TELEGRAM_TOPIC_AGENT_LOG": "31",
+        }
+        clear = {env_name: "" for _, _, env_name in tb.BOARD_TOPICS}
+        clear.update(env)
+        with patch.dict("os.environ", clear):
+            asyncio.run(telegram_bot.board_ping_handler(upd, ctx))
+
+        text = "\n".join(upd.message.replies)
+        self.assertIn("⚠️", text)
+        self.assertNotIn("❌", text)
+
+
 if __name__ == "__main__":
     unittest.main()

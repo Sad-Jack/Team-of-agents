@@ -1086,5 +1086,257 @@ class TestBoardPingCLIDryRun(unittest.TestCase):
         self.assertIn("board-ping", result.stdout)
 
 
+# ---------------------------------------------------------------------------
+# Timeout detection helper
+# ---------------------------------------------------------------------------
+
+class TestIsTimeoutException(unittest.TestCase):
+    def test_asyncio_timeout(self):
+        import asyncio
+        try:
+            exc = asyncio.TimeoutError()
+        except Exception:
+            self.skipTest("asyncio.TimeoutError not available")
+        self.assertTrue(telegram_board._is_timeout_exception(exc))
+
+    def test_generic_exception_with_timeout_message(self):
+        exc = Exception("Timed out")
+        self.assertTrue(telegram_board._is_timeout_exception(exc))
+
+    def test_generic_exception_with_timeout_message2(self):
+        exc = Exception("Read timeout after 20s")
+        self.assertTrue(telegram_board._is_timeout_exception(exc))
+
+    def test_forbidden_not_timeout(self):
+        exc = Exception("Forbidden: bot is not a member")
+        self.assertFalse(telegram_board._is_timeout_exception(exc))
+
+    def test_chat_not_found_not_timeout(self):
+        exc = Exception("Bad Request: chat not found")
+        self.assertFalse(telegram_board._is_timeout_exception(exc))
+
+    def test_value_error_not_timeout(self):
+        exc = ValueError("something went wrong")
+        self.assertFalse(telegram_board._is_timeout_exception(exc))
+
+    def test_class_named_timedout(self):
+        class TimedOut(Exception):
+            pass
+        self.assertTrue(telegram_board._is_timeout_exception(TimedOut("timed out")))
+
+    def test_class_named_readtimeout(self):
+        class ReadTimeout(Exception):
+            pass
+        self.assertTrue(telegram_board._is_timeout_exception(ReadTimeout("read timeout")))
+
+
+# ---------------------------------------------------------------------------
+# get_send_timeout
+# ---------------------------------------------------------------------------
+
+class TestGetSendTimeout(unittest.TestCase):
+    def test_default_is_20(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": ""}):
+            self.assertEqual(telegram_board.get_send_timeout(), 20.0)
+
+    def test_custom_value(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "30"}):
+            self.assertEqual(telegram_board.get_send_timeout(), 30.0)
+
+    def test_invalid_falls_back_to_default(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "bad"}):
+            self.assertEqual(telegram_board.get_send_timeout(), 20.0)
+
+    def test_zero_falls_back_to_default(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "0"}):
+            self.assertEqual(telegram_board.get_send_timeout(), 20.0)
+
+
+# ---------------------------------------------------------------------------
+# ping_board_topics: timeout + topic_filter
+# ---------------------------------------------------------------------------
+
+class TestPingTimeoutHandling(unittest.IsolatedAsyncioTestCase):
+
+    def _patch_env(self, overrides):
+        import os
+        _BOARD_VARS = ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID"] + \
+                      [e for _, _, e in telegram_board.BOARD_TOPICS]
+        clear = {k: "" for k in _BOARD_VARS}
+        clear.update(overrides)
+        return patch.dict(os.environ, clear)
+
+    async def test_timeout_exception_gives_timeout_status(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        class TimedOut(Exception):
+            pass
+
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=TimedOut("Timed out"))
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100x",
+                              "TELEGRAM_TOPIC_RELEASES": "42"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        rel = next(r for r in results if r["key"] == "releases")
+        self.assertEqual(rel["status"], "timeout")
+
+    async def test_timeout_does_not_count_as_hard_error(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=Exception("Timed out"))
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100x",
+                              "TELEGRAM_TOPIC_RELEASES": "42"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        self.assertFalse(any(r["status"] == "error" for r in results))
+        self.assertTrue(any(r["status"] == "timeout" for r in results))
+
+    async def test_forbidden_gives_error_status(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(
+            side_effect=Exception("Forbidden: bot is not a member")
+        )
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100x",
+                              "TELEGRAM_TOPIC_RELEASES": "42"}):
+            results = await telegram_board.ping_board_topics(fake_bot)
+
+        rel = next(r for r in results if r["key"] == "releases")
+        self.assertEqual(rel["status"], "error")
+
+    async def test_topic_filter_pings_only_one(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_msg = MagicMock()
+        fake_msg.message_id = 1
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(return_value=fake_msg)
+
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100x",
+                              "TELEGRAM_TOPIC_RELEASES": "42",
+                              "TELEGRAM_TOPIC_DECISIONS": "7",
+                              "TELEGRAM_TOPIC_AGENT_LOG": "31"}):
+            results = await telegram_board.ping_board_topics(fake_bot, topic_filter="agent_log")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["key"], "agent_log")
+        self.assertEqual(fake_bot.send_message.call_count, 1)
+
+    async def test_topic_filter_missing_topic(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+
+        # agent_log env not set
+        with self._patch_env({"TELEGRAM_BOARD_ENABLED": "true",
+                              "TELEGRAM_BOARD_CHAT_ID": "-100x"}):
+            results = await telegram_board.ping_board_topics(fake_bot, topic_filter="agent_log")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["status"], "missing")
+        fake_bot.send_message.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# format_ping_results: timeout rendering
+# ---------------------------------------------------------------------------
+
+class TestFormatPingResultsTimeout(unittest.TestCase):
+    def _make_result(self, key, status, error=None):
+        name = next(n for k, n, _ in telegram_board.BOARD_TOPICS if k == key)
+        env = next(e for k, _, e in telegram_board.BOARD_TOPICS if k == key)
+        return {"key": key, "name": name, "env": env, "status": status, "error": error}
+
+    def test_timeout_shows_warning_symbol(self):
+        result = self._make_result("agent_log", "timeout", "Timed out")
+        text = telegram_board.format_ping_results([result])
+        self.assertIn("⚠️", text)
+        self.assertIn("Agent Log", text)
+        self.assertIn("timeout", text.lower())
+        self.assertIn("проверь топик", text)
+
+    def test_timeout_not_shown_as_error(self):
+        result = self._make_result("agent_log", "timeout", "Timed out")
+        text = telegram_board.format_ping_results([result])
+        self.assertNotIn("❌", text)
+
+    def test_forbidden_shown_as_error(self):
+        result = self._make_result("releases", "error", "Forbidden: bot is not a member")
+        text = telegram_board.format_ping_results([result])
+        self.assertIn("❌", text)
+        self.assertIn("Forbidden", text)
+
+    def test_ok_shown_with_check(self):
+        result = self._make_result("releases", "ok")
+        text = telegram_board.format_ping_results([result])
+        self.assertIn("✅", text)
+
+
+# ---------------------------------------------------------------------------
+# board-ping CLI: --topic and invalid topic
+# ---------------------------------------------------------------------------
+
+class TestBoardPingTopicFlag(unittest.TestCase):
+
+    def _run_dry(self, env_overrides: dict, extra_args: list | None = None) -> tuple[str, int]:
+        import subprocess, sys, os as _os
+        _BOARD_VARS = ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID",
+                       "TELEGRAM_BOT_TOKEN"] + [e for _, _, e in telegram_board.BOARD_TOPICS]
+        env = {**_os.environ}
+        for k in _BOARD_VARS:
+            env[k] = ""
+        env.update(env_overrides)
+        cmd = [sys.executable, "run.py", "board-ping", "--dry-run"] + (extra_args or [])
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout + result.stderr, result.returncode
+
+    def test_topic_agent_log_dry_run(self):
+        out, _ = self._run_dry(
+            {"TELEGRAM_BOARD_ENABLED": "true",
+             "TELEGRAM_BOARD_CHAT_ID": "-100x",
+             "TELEGRAM_TOPIC_AGENT_LOG": "31"},
+            extra_args=["--topic", "agent_log"],
+        )
+        self.assertIn("Agent Log", out)
+        # Other topics should NOT appear in scoped dry-run
+        self.assertNotIn("Task Ideas", out)
+
+    def test_invalid_topic_shows_available_keys(self):
+        out, code = self._run_dry(
+            {},
+            extra_args=["--topic", "nonexistent_topic"],
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("unknown topic key", out.lower())
+        # Should list valid keys
+        self.assertIn("agent_log", out)
+        self.assertIn("releases", out)
+
+    def test_dry_run_shows_timeout_setting(self):
+        out, _ = self._run_dry(
+            {"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS": "30"},
+        )
+        self.assertIn("30", out)
+        self.assertIn("TIMEOUT", out.upper())
+
+    def test_dry_run_no_token_leaked(self):
+        out, _ = self._run_dry({"TELEGRAM_BOT_TOKEN": "xsecret-abc-token"})
+        self.assertNotIn("xsecret-abc-token", out)
+
+
 if __name__ == "__main__":
     unittest.main()

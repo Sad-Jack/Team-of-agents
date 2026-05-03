@@ -580,20 +580,64 @@ async def send_board_message(
 # Board ping — smoke-test helper
 # ---------------------------------------------------------------------------
 
-async def ping_board_topics(bot: object) -> list[dict]:
-    """
-    Send a ping message to every configured board topic.
+def get_send_timeout() -> float:
+    """Return TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS (default 20)."""
+    raw = (os.getenv("TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            logging.warning(
+                "telegram_board: TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS=%r is not a valid number — using default 20",
+                raw,
+            )
+    return 20.0
 
-    Returns a list of result dicts (ordered by BOARD_TOPICS):
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    """Return True when exc looks like a network / Telegram API timeout."""
+    type_name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    # Common timeout class names from python-telegram-bot, aiohttp, asyncio, httpx, requests
+    timeout_names = {
+        "timedout", "timeout", "timeouterror", "asynciotimeouterror",
+        "readtimeout", "connecttimeout", "writetimeout",
+    }
+    if type_name in timeout_names:
+        return True
+    for part in type_name.split("."):
+        if part in timeout_names:
+            return True
+    # Fall back to message heuristics
+    return any(kw in msg for kw in ("timed out", "timeout", "time out"))
+
+
+async def ping_board_topics(
+    bot: object,
+    topic_filter: Optional[str] = None,
+) -> list[dict]:
+    """
+    Send a ping message to every configured board topic (or a single one).
+
+    Args:
+        bot:          Telegram Bot instance.
+        topic_filter: If given, only ping this topic key (e.g. "agent_log").
+                      If None, ping all topics in BOARD_TOPICS order.
+
+    Returns a list of result dicts:
     {
-        "key":    str,   # topic key e.g. "task_ideas"
-        "name":   str,   # human name e.g. "Task Ideas"
-        "env":    str,   # env var name
-        "status": "ok" | "missing" | "error",
-        "error":  str | None,   # short error description on failure
+        "key":    str,                              # topic key e.g. "task_ideas"
+        "name":   str,                              # human name e.g. "Task Ideas"
+        "env":    str,                              # env var name
+        "status": "ok" | "missing" | "error" | "timeout",
+        "error":  str | None,
     }
 
     Does not raise. Never prints tokens or absolute paths.
+    Timeout errors get status "timeout" with a warning message.
+    Network / Telegram hard errors get status "error".
     """
     if not is_board_enabled():
         raise ValueError("Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
@@ -602,8 +646,16 @@ async def ping_board_topics(bot: object) -> list[dict]:
     if not board_chat_id:
         raise ValueError("TELEGRAM_BOARD_CHAT_ID is not set")
 
+    timeout_sec = get_send_timeout()
+
+    # Build the topic list to ping
+    if topic_filter is not None:
+        topics_to_ping = [(k, n, e) for k, n, e in BOARD_TOPICS if k == topic_filter]
+    else:
+        topics_to_ping = list(BOARD_TOPICS)
+
     results: list[dict] = []
-    for key, name, env_name in BOARD_TOPICS:
+    for key, name, env_name in topics_to_ping:
         topic_id = get_topic_id(key)
         if topic_id is None:
             results.append({
@@ -616,6 +668,9 @@ async def ping_board_topics(bot: object) -> list[dict]:
                 chat_id=board_chat_id,
                 message_thread_id=topic_id,
                 text=f"✅ ping: {name}",
+                read_timeout=timeout_sec,
+                write_timeout=timeout_sec,
+                connect_timeout=timeout_sec,
             )
             results.append({
                 "key": key, "name": name, "env": env_name,
@@ -623,11 +678,20 @@ async def ping_board_topics(bot: object) -> list[dict]:
             })
         except Exception as exc:
             short_err = str(exc)[:120]
-            logging.warning("telegram_board: ping failed for %r: %s", key, short_err)
-            results.append({
-                "key": key, "name": name, "env": env_name,
-                "status": "error", "error": short_err,
-            })
+            if _is_timeout_exception(exc):
+                logging.warning(
+                    "telegram_board: ping timeout for %r (%.0fs): %s", key, timeout_sec, short_err
+                )
+                results.append({
+                    "key": key, "name": name, "env": env_name,
+                    "status": "timeout", "error": short_err,
+                })
+            else:
+                logging.warning("telegram_board: ping failed for %r: %s", key, short_err)
+                results.append({
+                    "key": key, "name": name, "env": env_name,
+                    "status": "error", "error": short_err,
+                })
 
     return results
 
@@ -640,6 +704,10 @@ def format_ping_results(results: list[dict]) -> str:
             lines.append(f"✅ {r['name']}")
         elif r["status"] == "missing":
             lines.append(f"— {r['name']} (not configured)")
+        elif r["status"] == "timeout":
+            lines.append(
+                f"⚠️ {r['name']} — timeout: сообщение могло быть отправлено, проверь топик"
+            )
         else:
             lines.append(f"❌ {r['name']} — {r['error']}")
     return "\n".join(lines)

@@ -726,27 +726,46 @@ def cmd_board_config(_args):
 def cmd_board_ping(args):
     """Smoke-test Telegram Board topics.
 
-    Sends a ping message to every configured topic.
+    Sends a ping message to every configured topic (or --topic <key> for one).
     With --dry-run shows what would be sent without calling the Telegram API.
     Does not print TELEGRAM_BOT_TOKEN or absolute paths.
     """
     import telegram_board
 
     dry_run: bool = getattr(args, "dry_run", False)
+    topic_key: str | None = getattr(args, "topic", None) or None
     board_enabled = (os.getenv("TELEGRAM_BOARD_ENABLED") or "false").strip().lower() in {
         "1", "true", "yes", "y", "on"
     }
     board_chat_id = (os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip()
 
+    # Validate --topic key before doing anything else
+    valid_keys = {k for k, _, _ in telegram_board.BOARD_TOPICS}
+    if topic_key is not None and topic_key not in valid_keys:
+        print(f"Error: unknown topic key {topic_key!r}")
+        print("Available topic keys:")
+        for k, name, _ in telegram_board.BOARD_TOPICS:
+            print(f"  {k}  ({name})")
+        raise SystemExit(1)
+
+    # Build the subset to show/ping
+    topics_to_ping = [
+        (k, n, e) for k, n, e in telegram_board.BOARD_TOPICS
+        if topic_key is None or k == topic_key
+    ]
+
     if dry_run:
-        print("Board ping — dry run (no messages sent)")
+        scope = f"topic={topic_key}" if topic_key else "all topics"
+        print(f"Board ping — dry run (no messages sent) [{scope}]")
         print()
         print(f"TELEGRAM_BOARD_ENABLED: {str(board_enabled).lower()}")
         print(f"TELEGRAM_BOARD_CHAT_ID: {'(set)' if board_chat_id else '(not set)'}")
+        timeout_sec = telegram_board.get_send_timeout()
+        print(f"TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS: {timeout_sec:.0f}")
         print()
         print("Topics:")
         missing = []
-        for key, name, env_name in telegram_board.BOARD_TOPICS:
+        for key, name, env_name in topics_to_ping:
             tid = telegram_board.get_topic_id(key)
             if tid is not None:
                 print(f"  ✅ {name}: would send to thread {tid}")
@@ -784,13 +803,13 @@ def cmd_board_ping(args):
             raise SystemExit(1)
         bot = Bot(token=token)
         try:
-            results = await telegram_board.ping_board_topics(bot)
+            results = await telegram_board.ping_board_topics(bot, topic_filter=topic_key)
         except ValueError as exc:
             print(f"Error: {exc}")
             raise SystemExit(1)
         print(telegram_board.format_ping_results(results))
-        has_error = any(r["status"] == "error" for r in results)
-        if has_error:
+        has_hard_error = any(r["status"] == "error" for r in results)
+        if has_hard_error:
             raise SystemExit(1)
 
     asyncio.run(_run_ping())
@@ -2052,6 +2071,10 @@ def build_parser():
     board_ping_parser.add_argument(
         "--dry-run", action="store_true", default=False,
         help="Show what would be sent without calling Telegram API",
+    )
+    board_ping_parser.add_argument(
+        "--topic", default=None, metavar="KEY",
+        help="Ping a single topic by key (e.g. agent_log). Omit to ping all.",
     )
     board_ping_parser.set_defaults(func=cmd_board_ping)
 
