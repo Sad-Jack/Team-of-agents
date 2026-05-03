@@ -32,6 +32,7 @@ from supervisor import (
     plan_supervisor_action,
 )
 import telegram_message_links
+import telegram_fast_router
 
 
 def truncate_text(text: str, limit: int = 3500) -> str:
@@ -411,22 +412,33 @@ async def _run_dry(
 
 def _format_task_card(item: dict, work_item_type: str) -> str:
     """Format a task/bug as a human-readable Telegram card message (Russian)."""
-    icon = "🧩" if work_item_type == "task" else "🐞"
+    if work_item_type == "task":
+        header = "🧩 Новая задача"
+    else:
+        header = "🐞 Новый баг"
+
     item_id = item.get("id", "?")
     title = item.get("title", "?")
     status = item.get("status", "?")
-    priority = item.get("priority", "medium")
-    severity = item.get("severity", "")
-    description = truncate_text(item.get("description", "") or "", limit=200)
+    description = (item.get("description", "") or "").strip()
+    severity = (item.get("severity", "") or "").strip()
 
-    lines = [f"{icon} {item_id}: {title}", f"Статус: {status}"]
-    if severity and severity != "unknown":
-        lines.append(f"Серьёзность: {severity}")
-    else:
-        lines.append(f"Приоритет: {priority}")
+    lines = [
+        header,
+        f"ID: {item_id}",
+        f"Название: {title}",
+    ]
+
     if description:
-        lines.append(f"Описание: {description}")
-    lines.extend(["—", "Ответь на это сообщение, чтобы работать с задачей."])
+        label = "Серьёзность" if (work_item_type == "bug" and severity and severity != "unknown") else None
+        if label:
+            lines.append(f"\n{label}: {severity}")
+        lines.append(f"\nЧто нужно сделать:\n{truncate_text(description, limit=400)}")
+    elif work_item_type == "bug" and severity and severity != "unknown":
+        lines.append(f"\nСерьёзность: {severity}")
+
+    lines.append(f"\nСтатус: {status}")
+    lines.append("\nОтветь на это сообщение, чтобы работать именно с этой задачей.")
     return "\n".join(lines)
 
 
@@ -534,6 +546,18 @@ async def handle_user_text(
         return
 
     session_id, user_id, channel = _telegram_session(update)
+
+    # Fast router: handle simple read-only queries locally without calling the LLM.
+    # The enabled-check lives here (not only inside try_route) so that disabling
+    # the flag in tests/config is respected even when try_route is mocked.
+    # Reply-to enriched text (containing "Context: user replied to") bypasses the
+    # router so the supervisor gets full task context.
+    if telegram_fast_router.is_fast_router_enabled() and not text.startswith("Context: user replied to"):
+        fast_reply = telegram_fast_router.try_route(user_text)
+        if fast_reply is not None:
+            await _reply(update, fast_reply)
+            return
+
     execute_mode = force_execute if force_execute is not None else not cfg["dry_run_by_default"]
     if not execute_mode:
         await _run_dry(update, user_text, session_id=session_id, user_id=user_id, channel=channel, context=context)
@@ -783,13 +807,15 @@ async def text_handler(update: Any, context: Any) -> None:
         if msg_id is not None:
             link = telegram_message_links.find_link(chat_id, msg_id)
             if link is not None:
-                # Enrich the user message with task/bug context for the supervisor
+                # Enrich the user message with task/bug context for the supervisor.
+                # This lookup is done locally (no LLM call) to keep token usage minimal.
                 work_id = link["work_item_id"]
                 work_type = link.get("work_item_type", "task")
                 enriched = (
                     f"Context: user replied to {work_id} ({work_type}). "
                     f"User message: \"{user_text}\""
                 )
+                await _reply(update, f"Понял, работаю с {work_id}.")
                 await handle_user_text(update, context, enriched, confirmed=False, force_execute=None)
                 return
             if status_chat_id and chat_id == str(status_chat_id):

@@ -559,14 +559,16 @@ class TestStatusNotifications(unittest.TestCase):
         self.assertTrue(any("TASK-99" in m["text"] for m in bot.sent))
 
     def test_execute_create_bug_sends_notification(self):
-        upd = _FakeUpdate(user_id="42", text="баг")
+        upd = _FakeUpdate(user_id="42", text="зафиксируй баг: падает при старте")
         bot = _FakeSendBot()
         ctx = _make_ctx(bot=bot)
         ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
-        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
+        with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100",
+                                       "TELEGRAM_FAST_ROUTER_ENABLED": "false"}, clear=False):
             with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_BUG_PLAN):
                 with patch("telegram_bot.execute_supervisor_action", return_value=_CREATE_BUG_RESULT):
-                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+                    with patch("telegram_message_links.add_message_link"):
+                        asyncio.run(telegram_bot.text_handler(upd, ctx))
         self.assertTrue(any("🐞" in m["text"] for m in bot.sent))
 
 
@@ -691,7 +693,7 @@ class TestTaskCards(unittest.TestCase):
         self.assertIn("TASK-1", card)
         self.assertIn("Add healthcheck", card)
         self.assertIn("Ответь", card)
-        self.assertIn("high", card)
+        self.assertIn("Новая задача", card)
 
     def test_format_task_card_bug_icon_and_severity(self):
         bug = {
@@ -704,10 +706,12 @@ class TestTaskCards(unittest.TestCase):
         self.assertIn("critical", card)
         self.assertNotIn("Приоритет", card)
 
-    def test_format_task_card_unknown_severity_shows_priority(self):
+    def test_format_task_card_unknown_severity_no_severity_label(self):
         bug = {"id": "TASK-3", "title": "Minor", "status": "idea", "severity": "unknown", "priority": "low"}
         card = telegram_bot._format_task_card(bug, "bug")
-        self.assertIn("Приоритет", card)
+        self.assertIn("🐞", card)
+        self.assertIn("TASK-3", card)
+        self.assertNotIn("Серьёзность", card)
 
     def test_send_task_card_sends_to_status_chat(self):
         bot = _FakeSendBot()
@@ -853,6 +857,186 @@ class TestReplyRouting(unittest.TestCase):
                     asyncio.run(telegram_bot.text_handler(upd, ctx))
         enriched = handle_mock.call_args[0][2]
         self.assertIn("TASK-9", enriched)
+
+
+    def test_reply_to_linked_task_sends_acknowledgment(self):
+        """Bot says 'Понял, работаю с TASK-X.' before forwarding to supervisor."""
+        upd = _FakeUpdate(user_id="42", text="бери в работу", reply_to_msg_id=55, chat_id="100")
+        ctx = _make_ctx()
+        with patch("telegram_message_links.find_link", return_value={
+            "telegram_chat_id": "100",
+            "telegram_message_id": 55,
+            "work_item_type": "task",
+            "work_item_id": "TASK-6",
+        }):
+            with patch("telegram_bot.handle_user_text"):
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
+        self.assertTrue(any("TASK-6" in r for r in upd.message.replies))
+        self.assertTrue(any("Понял" in r for r in upd.message.replies))
+
+
+class TestTelegramConfigOutput(unittest.TestCase):
+    def _run_config(self, env_overrides):
+        import subprocess, sys
+        env = {**__import__("os").environ, **env_overrides}
+        result = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout
+
+    def test_status_chat_id_set_true_when_present(self):
+        output = self._run_config({"TELEGRAM_STATUS_CHAT_ID": "12345"})
+        self.assertIn("TELEGRAM_STATUS_CHAT_ID_SET=true", output)
+
+    def test_status_chat_id_set_false_when_absent(self):
+        output = self._run_config({"TELEGRAM_STATUS_CHAT_ID": ""})
+        self.assertIn("TELEGRAM_STATUS_CHAT_ID_SET=false", output)
+
+
+class TestTaskCardFormat(unittest.TestCase):
+    def test_task_card_has_id_label(self):
+        card = telegram_bot._format_task_card(
+            {"id": "TASK-6", "title": "Check UX", "status": "Backlog", "description": "Verify the flow."},
+            "task",
+        )
+        self.assertIn("ID: TASK-6", card)
+        self.assertIn("Название: Check UX", card)
+        self.assertIn("Что нужно сделать:", card)
+        self.assertIn("Статус: Backlog", card)
+        self.assertIn("именно с этой задачей", card)
+
+    def test_bug_card_header(self):
+        card = telegram_bot._format_task_card(
+            {"id": "BUG-3", "title": "Crash", "status": "idea", "severity": "critical"},
+            "bug",
+        )
+        self.assertIn("🐞 Новый баг", card)
+        self.assertIn("ID: BUG-3", card)
+        self.assertIn("Серьёзность: critical", card)
+
+    def test_task_card_no_local_paths(self):
+        card = telegram_bot._format_task_card(
+            {"id": "TASK-1", "title": "Test", "status": "idea", "description": "Do it."},
+            "task",
+        )
+        self.assertNotIn("/Users", card)
+        self.assertNotIn("/home", card)
+        self.assertNotIn("/var", card)
+
+    def test_task_card_no_description_skips_section(self):
+        card = telegram_bot._format_task_card(
+            {"id": "TASK-1", "title": "Test", "status": "idea"},
+            "task",
+        )
+        self.assertNotIn("Что нужно сделать:", card)
+
+
+class TestFastRouterIntegration(unittest.TestCase):
+    """Integration: fast router intercepts matching text before Supervisor."""
+
+    def test_fast_router_handles_status_without_llm(self):
+        upd = _FakeUpdate(user_id="42", text="статус")
+        ctx = _make_ctx()
+        ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
+        fake_reply = "📌 Статус проекта\n\nЗадач всего: 0"
+        with patch.dict("os.environ", {"TELEGRAM_FAST_ROUTER_ENABLED": "true"}, clear=False):
+            with patch("telegram_fast_router.try_route", return_value=fake_reply) as router_mock:
+                with patch("telegram_bot.plan_supervisor_action") as plan_mock:
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+        router_mock.assert_called_once_with("статус")
+        plan_mock.assert_not_called()
+        self.assertIn("📌", "\n".join(upd.message.replies))
+
+    def test_fast_router_disabled_falls_through_to_supervisor(self):
+        """When TELEGRAM_FAST_ROUTER_ENABLED=false, try_route must not be called."""
+        upd = _FakeUpdate(user_id="42", text="статус")
+        ctx = _make_ctx()
+        ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
+        with patch.dict("os.environ", {"TELEGRAM_FAST_ROUTER_ENABLED": "false"}, clear=False):
+            with patch("telegram_fast_router.try_route", return_value="fast reply") as router_mock:
+                with patch("telegram_bot.plan_supervisor_action", return_value={
+                    "intent": "project_status", "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "project_status", "args": {}},
+                    "explanation": "ok", "warnings": [],
+                }) as plan_mock:
+                    with patch("telegram_bot.execute_supervisor_action", return_value={
+                        "executed": True, "action": "project_status", "result": {},
+                    }):
+                        asyncio.run(telegram_bot.text_handler(upd, ctx))
+        router_mock.assert_not_called()
+        plan_mock.assert_called_once()
+
+    def test_fast_router_none_falls_through_to_supervisor(self):
+        upd = _FakeUpdate(user_id="42", text="создай задачу: тест")
+        ctx = _make_ctx()
+        ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
+        with patch.dict("os.environ", {"TELEGRAM_FAST_ROUTER_ENABLED": "true"}, clear=False):
+            with patch("telegram_fast_router.try_route", return_value=None):
+                with patch("telegram_bot.plan_supervisor_action", return_value={
+                    "intent": "create_task", "confidence": 0.9,
+                    "requires_confirmation": False,
+                    "action": {"name": "create_task", "args": {"title": "тест"}},
+                    "explanation": "ok", "warnings": [],
+                }) as plan_mock:
+                    with patch("telegram_bot.execute_supervisor_action", return_value={
+                        "executed": True, "action": "create_task",
+                        "result": {"id": "TASK-99", "title": "тест", "status": "idea"},
+                    }):
+                        asyncio.run(telegram_bot.text_handler(upd, ctx))
+        plan_mock.assert_called_once()
+
+    def test_reply_context_bypasses_fast_router(self):
+        """Supervisor-enriched reply text must not be intercepted by fast router."""
+        upd = _FakeUpdate(user_id="42", text="бери в работу", reply_to_msg_id=10, chat_id="100")
+        ctx = _make_ctx()
+        ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
+        with patch.dict("os.environ", {"TELEGRAM_FAST_ROUTER_ENABLED": "true"}, clear=False):
+            with patch("telegram_message_links.find_link", return_value={
+                "telegram_chat_id": "100", "telegram_message_id": 10,
+                "work_item_type": "task", "work_item_id": "TASK-5",
+            }):
+                with patch("telegram_fast_router.try_route") as router_mock:
+                    with patch("telegram_bot.handle_user_text") as handle_mock:
+                        asyncio.run(telegram_bot.text_handler(upd, ctx))
+        # router should not be called from text_handler on the raw "бери в работу" text
+        # (the handle_user_text stub short-circuits so we just check routing)
+        handle_mock.assert_called_once()
+        enriched = handle_mock.call_args[0][2]
+        self.assertIn("TASK-5", enriched)
+
+
+class TestFastRouterConfigOutput(unittest.TestCase):
+
+    def _run_config(self, env_overrides):
+        import subprocess, sys, os as _os
+        env = {**_os.environ, **env_overrides}
+        result = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        return result.stdout
+
+    def test_fast_router_enabled_true(self):
+        output = self._run_config({"TELEGRAM_FAST_ROUTER_ENABLED": "true"})
+        self.assertIn("TELEGRAM_FAST_ROUTER_ENABLED=true", output)
+
+    def test_fast_router_enabled_false(self):
+        output = self._run_config({"TELEGRAM_FAST_ROUTER_ENABLED": "false"})
+        self.assertIn("TELEGRAM_FAST_ROUTER_ENABLED=false", output)
+
+    def test_fast_router_default_is_true(self):
+        env = {k: v for k, v in __import__("os").environ.items() if k != "TELEGRAM_FAST_ROUTER_ENABLED"}
+        import subprocess, sys
+        result = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True, env=env,
+            cwd="/Users/semionovk/MySpace/team",
+        )
+        self.assertIn("TELEGRAM_FAST_ROUTER_ENABLED=true", result.stdout)
 
 
 if __name__ == "__main__":

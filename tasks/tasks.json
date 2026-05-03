@@ -888,5 +888,75 @@
     "notes": [],
     "related_decisions": [],
     "release_id": null
+  },
+  {
+    "id": "TASK-5",
+    "type": "feature",
+    "title": "Проверить новый UX задач в Telegram",
+    "description": "Протестировать и проверить обновлённый UX отображения задач в Telegram-интерфейсе. Убедиться, что форматирование, ссылки и навигация работают корректно после последних изменений.",
+    "status": "idea",
+    "priority": "medium",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [],
+    "estimate": null,
+    "artifacts": {
+      "analysis": null,
+      "acceptance_criteria": [],
+      "architecture": null,
+      "technical_risks": [],
+      "implementation_guidance": null,
+      "implementation": null,
+      "implementation_plan": {
+        "summary": "",
+        "files_to_create": [],
+        "files_to_modify": [],
+        "proposed_changes": [],
+        "commands_to_run": [],
+        "tests_to_add": [],
+        "risks": [],
+        "rollback_notes": ""
+      },
+      "patch_proposal": {
+        "summary": "",
+        "files": [],
+        "unified_diff": "",
+        "requires_approval": true,
+        "approved": false,
+        "applied": false,
+        "applied_at": null
+      },
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [],
+      "edge_cases": [],
+      "bugs": [],
+      "qa_verification": {
+        "verdict": "unknown",
+        "summary": "",
+        "checked_items": [],
+        "failed_checks": [],
+        "bugs_found": [],
+        "recommended_next_status": "review"
+      },
+      "command_results": [],
+      "repository_context": {
+        "attached": false,
+        "scanned_at": null,
+        "repo_root": ".",
+        "summary": {
+          "total_files_indexed": 0,
+          "interesting_directories": [],
+          "ignored_paths": []
+        },
+        "relevant_files": [],
+        "search_hits": []
+      }
+    },
+    "history": [],
+    "notes": [],
+    "related_decisions": [],
+    "release_id": null
   }
 ]

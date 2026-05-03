@@ -624,9 +624,15 @@ def cmd_telegram_config(_args):
         "y",
         "on",
     }
+    status_chat_set = bool((os.getenv("TELEGRAM_STATUS_CHAT_ID") or "").strip())
+    fast_router_enabled = (os.getenv("TELEGRAM_FAST_ROUTER_ENABLED") or "true").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
     print(f"TELEGRAM_BOT_TOKEN_SET={str(token_set).lower()}")
     print(f"TELEGRAM_OWNER_ID_SET={str(owner_set).lower()}")
     print(f"TELEGRAM_DRY_RUN_BY_DEFAULT={str(dry_run_default).lower()}")
+    print(f"TELEGRAM_STATUS_CHAT_ID_SET={str(status_chat_set).lower()}")
+    print(f"TELEGRAM_FAST_ROUTER_ENABLED={str(fast_router_enabled).lower()}")
     print(f"STT_PROVIDER={(os.getenv('STT_PROVIDER') or 'disabled').strip().lower()}")
     print(f"FFMPEG_BINARY={(os.getenv('FFMPEG_BINARY') or 'ffmpeg').strip() or 'ffmpeg'}")
     print(f"VOICE_WORK_DIR={(os.getenv('VOICE_WORK_DIR') or '.tmp/voice').strip() or '.tmp/voice'}")
