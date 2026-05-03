@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import backlog
+import storage
 
 RELEASES_DIR = Path("releases")
 RELEASES_PATH = RELEASES_DIR / "releases.json"
@@ -18,18 +18,16 @@ def _now_iso_utc() -> str:
 
 def _ensure_storage() -> None:
     RELEASES_DIR.mkdir(parents=True, exist_ok=True)
-    if not RELEASES_PATH.exists():
-        RELEASES_PATH.write_text("[]", encoding="utf-8")
+    storage.JSON_COLLECTION_PATHS["releases"] = RELEASES_PATH
+    storage.init_storage()
 
 
 def load_releases() -> list[dict]:
     _ensure_storage()
     try:
-        data = json.loads(RELEASES_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {RELEASES_PATH.as_posix()}: {exc}") from exc
-    if not isinstance(data, list):
-        raise ValueError(f"{RELEASES_PATH.as_posix()} must contain a JSON array.")
+        data = storage.load_collection("releases")
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
     for item in data:
         validate_release(item)
     return data
@@ -39,7 +37,10 @@ def save_releases(releases: list[dict]) -> None:
     _ensure_storage()
     for item in releases:
         validate_release(item)
-    RELEASES_PATH.write_text(json.dumps(releases, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        storage.save_collection("releases", releases)
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def validate_release(release: dict) -> None:

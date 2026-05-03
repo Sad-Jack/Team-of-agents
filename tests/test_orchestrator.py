@@ -139,6 +139,7 @@ class BaseIsolatedTest(unittest.TestCase):
                 "repository_context": self.default_repository_context(),
             },
             "history": [],
+            "notes": [],
         }
         if task_type == "bug":
             task["id"] = "BUG-1"
@@ -164,6 +165,17 @@ class OrchestratorTests(BaseIsolatedTest):
 
     def test_validate_accepts_patch_proposal(self):
         orchestrator.validate_task(self.make_task())
+
+    def test_validate_accepts_notes(self):
+        task = self.make_task()
+        task["notes"] = [{"timestamp": "2026-05-02T12:00:00Z", "author": "user", "text": "note"}]
+        orchestrator.validate_task(task)
+
+    def test_validate_rejects_invalid_notes(self):
+        task = self.make_task()
+        task["notes"] = [{"author": "user", "text": "note"}]
+        with self.assertRaises(ValueError):
+            orchestrator.validate_task(task)
 
     def test_validate_accepts_backlog_fields(self):
         task = self.make_task()

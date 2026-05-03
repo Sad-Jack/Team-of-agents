@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -11,7 +12,7 @@ import agent_runner
 import orchestrator
 import project_context_loader
 import run
-from command_runner import is_command_allowed, run_safe_command
+from command_runner import get_command_working_directory, is_command_allowed, normalize_python_command, run_safe_command
 from llm_client import FakeLLMClient
 
 
@@ -53,8 +54,19 @@ class CommandLayerTests(unittest.TestCase):
 
     def test_command_allowlist_and_operators(self):
         self.assertTrue(is_command_allowed("python run.py validate"))
+        self.assertTrue(is_command_allowed("python3 run.py validate"))
         self.assertFalse(is_command_allowed("python run.py validate && whoami"))
         self.assertFalse(is_command_allowed("python run.py unknown"))
+
+    def test_normalize_python_command_python(self):
+        args = normalize_python_command("python run.py validate")
+        self.assertEqual(args[0], sys.executable)
+        self.assertEqual(args[1:], ["run.py", "validate"])
+
+    def test_normalize_python_command_python3(self):
+        args = normalize_python_command("python3 run.py validate")
+        self.assertEqual(args[0], sys.executable)
+        self.assertEqual(args[1:], ["run.py", "validate"])
 
     def test_run_safe_command_rejects_disallowed(self):
         with self.assertRaises(ValueError):
@@ -63,10 +75,36 @@ class CommandLayerTests(unittest.TestCase):
     def test_run_safe_command_no_shell_true(self):
         with patch("command_runner.subprocess.run") as mocked:
             mocked.return_value = SimpleNamespace(returncode=0, stdout="ok", stderr="")
-            result = run_safe_command("python run.py validate")
+            with patch("command_runner.get_system_root", return_value="/tmp/system-root"):
+                with patch("command_runner.resolve_managed_repo_path", return_value="/tmp/managed-root"):
+                    result = run_safe_command("python run.py validate")
             self.assertTrue(result["success"])
             self.assertIn("shell", mocked.call_args.kwargs)
             self.assertFalse(mocked.call_args.kwargs["shell"])
+            self.assertEqual(mocked.call_args.args[0][0], sys.executable)
+            self.assertEqual(mocked.call_args.kwargs["cwd"], "/tmp/system-root")
+
+    def test_run_safe_command_python3_allowed(self):
+        with patch("command_runner.subprocess.run") as mocked:
+            mocked.return_value = SimpleNamespace(returncode=0, stdout="ok", stderr="")
+            with patch("command_runner.get_system_root", return_value="/tmp/system-root"):
+                with patch("command_runner.resolve_managed_repo_path", return_value="/tmp/managed-root"):
+                    result = run_safe_command("python3 run.py validate")
+            self.assertTrue(result["success"])
+            self.assertEqual(mocked.call_args.args[0][0], sys.executable)
+
+    def test_get_command_working_directory_scope(self):
+        with patch("command_runner.get_system_root", return_value="/tmp/system-root"):
+            with patch("command_runner.resolve_managed_repo_path", return_value="/tmp/managed-root"):
+                self.assertEqual(get_command_working_directory("python3 run.py validate"), "/tmp/system-root")
+                self.assertEqual(
+                    get_command_working_directory("python3 -m unittest discover -s tests"),
+                    "/tmp/managed-root",
+                )
+
+    def test_run_safe_command_rejects_shell_operators(self):
+        with self.assertRaises(ValueError):
+            run_safe_command("python3 run.py validate | cat")
 
     def test_run_safe_command_timeout(self):
         import subprocess

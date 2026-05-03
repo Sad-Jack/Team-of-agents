@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import agent_runner
 import orchestrator
@@ -86,6 +87,11 @@ class RepoInspectorTests(unittest.TestCase):
         context = repo_inspector.build_repository_context_for_task(target, repo_root=self.root.as_posix())
         self.assertTrue(context["attached"])
         self.assertGreaterEqual(len(context["relevant_files"]), 1)
+
+    def test_defaults_to_managed_repo_root(self):
+        with patch("repo_inspector.resolve_managed_repo_path", return_value=self.root.as_posix()):
+            summary = repo_inspector.scan_repository()
+            self.assertGreaterEqual(summary["total_files_indexed"], 1)
 
     def test_agent_runner_includes_repository_context_only_when_attached(self):
         task = orchestrator.create_task("T", "D")

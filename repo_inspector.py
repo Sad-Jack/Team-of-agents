@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
+from managed_project import resolve_managed_repo_path
+
 SAFE_TEXT_EXTENSIONS = {
     ".py",
     ".md",
@@ -36,7 +38,9 @@ def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _repo_root_path(repo_root: str = ".") -> Path:
+def _repo_root_path(repo_root: str | None = None) -> Path:
+    if repo_root is None:
+        return Path(resolve_managed_repo_path())
     return Path(repo_root).resolve()
 
 
@@ -44,7 +48,7 @@ def _contains_forbidden_tokens(path: str) -> bool:
     return any(token in path for token in ("&&", "||", ";", "|", ">", "<", "`", "$("))
 
 
-def is_safe_repo_path(path: str, repo_root: str = ".") -> bool:
+def is_safe_repo_path(path: str, repo_root: str | None = None) -> bool:
     if not isinstance(path, str) or not path.strip():
         return False
     if _contains_forbidden_tokens(path):
@@ -80,7 +84,7 @@ def _is_safe_text_file(relative_path: Path) -> bool:
     return relative_path.suffix.lower() in SAFE_TEXT_EXTENSIONS
 
 
-def scan_repository(repo_root: str = ".", max_files: int = 500) -> dict:
+def scan_repository(repo_root: str | None = None, max_files: int = 500) -> dict:
     root = _repo_root_path(repo_root)
     indexed = 0
     interesting_dirs = set()
@@ -112,7 +116,7 @@ def scan_repository(repo_root: str = ".", max_files: int = 500) -> dict:
     }
 
 
-def list_repository_tree(repo_root: str = ".", max_depth: int = 4) -> List[str]:
+def list_repository_tree(repo_root: str | None = None, max_depth: int = 4) -> List[str]:
     root = _repo_root_path(repo_root)
     items: List[str] = []
     depth_limit = max(0, int(max_depth))
@@ -129,7 +133,7 @@ def list_repository_tree(repo_root: str = ".", max_depth: int = 4) -> List[str]:
     return items
 
 
-def read_repository_file(path: str, repo_root: str = ".", max_chars: int = 4000) -> dict:
+def read_repository_file(path: str, repo_root: str | None = None, max_chars: int = 4000) -> dict:
     if not is_safe_repo_path(path, repo_root=repo_root):
         raise ValueError(f"Unsafe repository path: {path}")
 
@@ -154,7 +158,7 @@ def read_repository_file(path: str, repo_root: str = ".", max_chars: int = 4000)
     }
 
 
-def search_repository(query: str, repo_root: str = ".", max_results: int = 20) -> List[dict]:
+def search_repository(query: str, repo_root: str | None = None, max_results: int = 20) -> List[dict]:
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Search query must be a non-empty string.")
 
@@ -184,7 +188,7 @@ def search_repository(query: str, repo_root: str = ".", max_results: int = 20) -
     return results
 
 
-def build_repository_context_for_task(task: dict, repo_root: str = ".") -> dict:
+def build_repository_context_for_task(task: dict, repo_root: str | None = None) -> dict:
     artifacts = task.get("artifacts", {}) if isinstance(task, dict) else {}
     plan = artifacts.get("implementation_plan", {}) if isinstance(artifacts, dict) else {}
     patch = artifacts.get("patch_proposal", {}) if isinstance(artifacts, dict) else {}
@@ -228,11 +232,12 @@ def build_repository_context_for_task(task: dict, repo_root: str = ".") -> dict:
             }
         )
 
-    summary = scan_repository(repo_root=repo_root)
+    root = _repo_root_path(repo_root)
+    summary = scan_repository(repo_root=root.as_posix())
     return {
         "attached": True,
         "scanned_at": _now_iso_utc(),
-        "repo_root": ".",
+        "repo_root": root.as_posix(),
         "summary": summary,
         "relevant_files": relevant_files,
         "search_hits": [],

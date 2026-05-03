@@ -1,5 +1,8 @@
 # Commands
 
+Examples below use `python` for brevity; on macOS/Linux you may use `python3`.
+Internal allowlisted execution normalizes `python`/`python3` to the current interpreter (`sys.executable`).
+
 - `python run.py create --title "..." --description "..."`
 - `python run.py create-bug --title "..." --description "..." --raw "..."`
 - `python run.py list`
@@ -48,15 +51,22 @@
 - `python run.py attach-repo-context --id TASK-1`
 - `python run.py repo-context --id TASK-1`
 - `python -m unittest discover -s tests`
+- `python3 -m unittest discover -s tests`
 
 ## Allowed Local Commands
 
 Only these commands can be executed by the Command Execution Layer:
 - `python -m unittest discover -s tests`
+- `python3 -m unittest discover -s tests`
 - `python run.py validate`
+- `python3 run.py validate`
 - `python run.py agents`
+- `python3 run.py agents`
 - `python run.py config`
+- `python3 run.py config`
 - `python run.py context`
+- `python3 run.py context`
 - `python run.py list`
+- `python3 run.py list`
 
 Arbitrary shell commands are rejected.

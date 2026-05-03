@@ -1,28 +1,27 @@
 [
   {
     "id": "TASK-1",
-    "title": "Create login API",
-    "description": "Raw user idea: add basic login endpoint for MVP auth flow.",
-    "status": "done",
-    "priority": "medium",
+    "type": "feature",
+    "title": "Добавить healthcheck-команду",
+    "description": "Добавить CLI-команду для проверки состояния системы.",
+    "status": "ready_for_dev",
+    "priority": "high",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [
+      "demo",
+      "mvp",
+      "backend"
+    ],
+    "estimate": null,
     "artifacts": {
-      "analysis": "Structured requirements derived from idea: Raw user idea: add basic login endpoint for MVP auth flow.",
-      "acceptance_criteria": [
-        "Given the task scope, when implementation is completed, then expected outcome is observable.",
-        "Core flow works without runtime errors."
-      ],
-      "architecture": "Use simple modular Python components: task storage, orchestrator logic, CLI boundary.",
+      "analysis": null,
+      "acceptance_criteria": [],
+      "architecture": null,
       "technical_risks": [],
       "implementation_guidance": null,
-      "implementation": "Implement incrementally with deterministic transitions and explicit status checks.\nDeveloper started execution based on ready_for_dev guidance.",
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [
-        "Happy path validation for expected output.",
-        "Invalid input handling does not break workflow."
-      ],
-      "edge_cases": [],
-      "bugs": [],
+      "implementation": null,
       "implementation_plan": {
         "summary": "",
         "files_to_create": [],
@@ -33,14 +32,6 @@
         "risks": [],
         "rollback_notes": ""
       },
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
       "patch_proposal": {
         "summary": "",
         "files": [],
@@ -50,55 +41,59 @@
         "applied": false,
         "applied_at": null
       },
-      "command_results": [
-        {
-          "command": "python run.py validate",
-          "exit_code": 0,
-          "success": true,
-          "stdout": "Validation passed: 7 task(s) are valid.\n",
-          "stderr": "",
-          "started_at": "2026-05-02T14:29:16Z",
-          "finished_at": "2026-05-02T14:29:16Z",
-          "duration_seconds": 0.057,
-          "source": "manual",
-          "working_directory": "."
-        },
-        {
-          "command": "python run.py validate",
-          "exit_code": 0,
-          "success": true,
-          "stdout": "Validation passed: 8 task(s) are valid.\n",
-          "stderr": "",
-          "started_at": "2026-05-02T14:29:23Z",
-          "finished_at": "2026-05-02T14:29:24Z",
-          "duration_seconds": 0.054,
-          "source": "manual",
-          "working_directory": "."
-        }
-      ],
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [],
+      "edge_cases": [],
+      "bugs": [],
+      "qa_verification": {
+        "verdict": "unknown",
+        "summary": "",
+        "checked_items": [],
+        "failed_checks": [],
+        "bugs_found": [],
+        "recommended_next_status": "review"
+      },
+      "command_results": [],
       "repository_context": {
         "attached": true,
-        "scanned_at": "2026-05-02T14:38:07Z",
-        "repo_root": ".",
+        "scanned_at": "2026-05-02T20:05:42Z",
+        "repo_root": "/Users/semionovk/MySpace/team",
         "summary": {
-          "total_files_indexed": 41,
+          "total_files_indexed": 80,
           "interesting_directories": [
             ".idea",
+            ".tmp",
             "AGENTS.md",
+            "CLAUDE.md",
             "README.md",
             "agent_runner.py",
             "agents",
             "artifacts",
+            "backlog.py",
             "command_runner.py",
+            "data",
+            "decision_context_loader.py",
+            "decision_log.py",
+            "decisions",
+            "docs",
             "llm_client.py",
+            "managed_project.py",
             "orchestrator.py",
             "patch_utils.py",
             "project_context",
             "project_context_loader.py",
+            "project_manager.py",
+            "release_manager.py",
+            "releases",
             "repo_inspector.py",
             "requirements.txt",
             "run.py",
+            "speech_to_text.py",
+            "storage.py",
+            "supervisor.py",
             "tasks",
+            "telegram_bot.py",
             "tests",
             "work-items"
           ],
@@ -135,12 +130,437 @@
             ".git/logs/refs/remotes/origin",
             ".git/logs/refs/remotes/origin/main",
             ".git/objects",
+            ".git/objects/00",
+            ".git/objects/00/5ed3d00e829d22774d773e0bc665ae4b510e0c",
             ".git/objects/01",
             ".git/objects/01/316eec18733a19f7e41eff5c356cf9ce9e0f3f",
+            ".git/objects/03",
+            ".git/objects/03/ad6008613546b5a56517b1ca12405169aacd44",
             ".git/objects/04",
             ".git/objects/04/1a8e3cfb0565b3f5df7c8b2fadddeb8e227693",
             ".git/objects/05",
+            ".git/objects/05/57cd437178a214927e844ffd5ae36c97012bf3",
             ".git/objects/05/af1d2db37887ecbc7521b99dec299ee2558d91",
+            ".git/objects/06",
+            ".git/objects/06/a600b67ba52642fbbb7aaf5a8be1cbc30af027",
+            ".git/objects/07",
+            ".git/objects/07/fc5574b24b14f2415b5c121863f32e6f03f19e",
+            ".git/objects/09",
+            ".git/objects/09/1bc5f9584f6f08dcc79facecc86df95be1e631",
+            ".git/objects/0b",
+            ".git/objects/0b/30a0723160fb15489a77345813ecedba4718dd",
+            ".git/objects/0b/69d5f9be2bdc7fd924cbd195c11934e4b6d376",
+            ".git/objects/0f",
+            ".git/objects/0f/3be80d8d066d46def0fe55bb2aeb7e69d937a5",
+            ".git/objects/11",
+            ".git/objects/11/5097b5f44f57a364578c33cf9ce4373a08ed5b",
+            ".git/objects/12",
+            ".git/objects/12/9cf735c84a2d9ee9639ced11721cc8c92a37be",
+            ".git/objects/12/a2d6e73f033b39aade7fa8910eebcac69fda68",
+            ".git/objects/13",
+            ".git/objects/13/10d6edf758d11559ff36d4915ff008b964f11b",
+            ".git/objects/13/85de09cd0cb5c460e7f01fb2c9e05c0851f4ab",
+            ".git/objects/13/c4b66ae1e8053a1d3a24bf12bc3693d249a190",
+            ".git/objects/13/f46c676bba85092f82a6396565e24e5824f7a1",
+            ".git/objects/14",
+            ".git/objects/14/18de710e56987466310708e7d404910461a675",
+            ".git/objects/14/395c268d43fa8db7c8ad6301b42d17c2c5fbb3",
+            ".git/objects/14/5ff6746ff66e2ee097533837ebdaa558ea0a24",
+            ".git/objects/15",
+            ".git/objects/15/81e8b41f498e2f17bc958b2abae8203a85658e",
+            ".git/objects/15/bca6354568b5b5be73c6f570e18c69c705b34f",
+            ".git/objects/16",
+            ".git/objects/16/144daffbe2fd82be33930733d2ff9b106e7501",
+            ".git/objects/16/38c78fa82cb828a504b2849bd130445e351d76",
+            ".git/objects/16/863eb7d6e0cd5ccc287255a01768c5b015c06f",
+            ".git/objects/16/96901e95324a71bc5aa8be740b2dfab8d9cd37",
+            ".git/objects/17",
+            ".git/objects/17/7b6d4704d8ddcd47df6f8f2ccc0510566f942e",
+            ".git/objects/18",
+            ".git/objects/18/7158cc40f6c9e96c9eea550f39ef22aece52a8",
+            ".git/objects/18/e1c2cdbe33a9f9dc75b5419086183fcafcb7f4",
+            ".git/objects/1a",
+            ".git/objects/1a/0bae7bf9436f0ed007d24e109fcbe493cb444f",
+            ".git/objects/1a/587491b001784b659268a4c9de3bb66c3639be",
+            ".git/objects/1f",
+            ".git/objects/1f/8d68d17b45a588614ce4062479e3a72fad25bc",
+            ".git/objects/20",
+            ".git/objects/20/945062a5b996bca340b1354a52350d3ad5fdd6",
+            ".git/objects/22",
+            ".git/objects/22/48919818f624710aebbce15295a08b771cc1fb",
+            ".git/objects/22/49efda717f736fcc8f1c05902b401319f628d2",
+            ".git/objects/22/fb321097e28b44a38a4d325d7bb2c521fce22f",
+            ".git/objects/28",
+            ".git/objects/28/08873fa0d5bda4bf4dcf6ac14158ead57bf2be",
+            ".git/objects/28/679086ec0fa5f365967633042a4f306596f79d",
+            ".git/objects/28/dcd865b008118417428a09aae24c04cb3861a4",
+            ".git/objects/29",
+            ".git/objects/29/1bc924fc2b97a0fb721da99f595c89cec2807b",
+            ".git/objects/29/99a6a09aa4005b535f0881b789c57f17961fc4",
+            ".git/objects/2a"
+          ]
+        },
+        "relevant_files": [
+          {
+            "path": "README.md",
+            "reason": "Referenced by task planning context.",
+            "size_bytes": 13219,
+            "preview": "# Team of Agents\n\n## Что это\n\nЛокальная система управления разработкой с AI-агентами.\nОна помогает вести идеи, задачи и баги, поддерживает backlog, релизы, ADR-решения, QA-проверки и управляемый workflow между агентами.\n\n## Зачем это нужно\n\n- превращать идеи в структурированные задачи\n- заводить баги из сырого текста и логов\n- прогонять задачи через `Analyst -> Architect -> Developer -> QA`\n- хранить архитектурные решения (ADR)\n- управлять backlog, зависимостями и блокерами\n- собирать релизные пакеты и проверять readiness\n- готовить developer plan, QA report, release notes\n- в будущем подключить Telegram-слой\n\n## Как устроена система\n\n- `run.py` — основной CLI\n- `orchestrator.py` — управление состояниями задач и переходами workflow\n- `agent_runner.py` — запуск агентных промптов и парсинг JSON-ответов\n- `llm_client.py` — выбор и вызов LLM-провайдера (`fake`, `claude_code`, `openai`)\n- `supervisor.py` — планирование/безопасное выполнение действий из natural language\n- `backlog.py` — логика ready/blocked и сортировка backlog\n- `release_manager.py` — релизы, readiness, release notes/risks/rollback\n- `decision_log.py` — ADR-слой (`decisions/index.json` + `decisions/ADR-*.md`)\n- `repo_in"
+          },
+          {
+            "path": "AGENTS.md",
+            "reason": "Referenced by task planning context.",
+            "size_bytes": 6825,
+            "preview": "# AGENTS.md\n\n## Core Ownership\n- `orchestrator.py` owns status transitions and gates.\n- `agent_runner.py` owns prompt execution and JSON parsing.\n- `llm_client.py` owns provider selection.\n- `storage.py` owns persistence backend selection and collection read/write.\n- `managed_project.py` owns separation between system root and managed repo root.\n- `project_manager.py` owns high-level PM operations for end users.\n- `command_runner.py` is the only command execution layer.\n- `repo_inspector.py` is the only repository inspection layer.\n- `backlog.py` owns dependency/readiness logic.\n- `decisions/` is the source of architectural decision memory.\n- `release_manager.py` owns release metadata and readiness calculations.\n- Supervisor maps natural language to safe explicit actions.\n- `project_context/*.md` stores reusable project knowledge.\n- `CLAUDE.md` is the project instruction file for Claude Code.\n\n## Command Execution Rules\n- LLM must never execute commands directly.\n- Only allowlisted commands may run.\n- No arbitrary shell execution.\n- Always run subprocess with `shell=False`.\n- No destructive commands.\n- Command outputs must be saved in `command_results`.\n- QA may use `command_result"
+          },
+          {
+            "path": "run.py",
+            "reason": "Referenced by task planning context.",
+            "size_bytes": 78267,
+            "preview": "import argparse\nimport json\nimport os\nimport shlex\nimport shutil\nimport sys\nfrom pathlib import Path\n\nimport backlog\nimport decision_log\nimport orchestrator\nimport release_manager\nfrom command_runner import ALLOWED_COMMANDS, is_command_allowed, run_safe_command\nfrom decision_log import load_decision_index\nfrom llm_client import LLMClientError, get_llm_client\nfrom managed_project import get_managed_project_info, get_managed_repo_path, validate_managed_repo_path\nfrom decision_log import (\n    create_decision,\n    get_decision_by_id,\n    get_task_related_decisions,\n    link_decision_to_task,\n    list_decisions,\n    read_decision_file,\n    unlink_decision_from_task,\n)\nfrom orchestrator import (\n    add_history_event,\n    create_bug,\n    create_task,\n    get_task,\n    get_task_implementation_plan,\n    get_task_patch_proposal,\n    list_available_agents,\n    list_tasks,\n    run_all_ready_tasks,\n    run_next_for_task,\n    validate_all_tasks,\n)\nfrom patch_utils import apply_patch_proposal, approve_patch, export_patch_proposal\nfrom project_manager import (\n    add_task_note,\n    advance_task_safely,\n    get_blockers_summary,\n    get_next_work_recommendation,\n    get_project_status,\n    get_r"
+          },
+          {
+            "path": "orchestrator.py",
+            "reason": "Referenced by task planning context.",
+            "size_bytes": 35230,
+            "preview": "from datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Dict, List, Optional, Tuple\n\nimport backlog\nfrom agent_runner import AGENT_FILES, AGENTS_DIR, run_agent\nfrom llm_client import BaseLLMClient, get_llm_client\nimport storage\n\nTASKS_PATH = Path(\"tasks\") / \"tasks.json\"\n\nALLOWED_TYPES = [\"feature\", \"bug\"]\nALLOWED_STATUSES = [\n    \"idea\",\n    \"refined\",\n    \"ready_for_dev\",\n    \"in_progress\",\n    \"review\",\n    \"done\",\n]\n\nREQUIRED_ARTIFACT_FIELDS = [\n    \"analysis\",\n    \"acceptance_criteria\",\n    \"architecture\",\n    \"technical_risks\",\n    \"implementation_guidance\",\n    \"implementation\",\n    \"implementation_plan\",\n    \"patch_proposal\",\n    \"changed_files\",\n    \"developer_notes\",\n    \"test_cases\",\n    \"edge_cases\",\n    \"bugs\",\n    \"qa_verification\",\n    \"command_results\",\n    \"repository_context\",\n]\n\nREQUIRED_BUG_REPORT_FIELDS = [\n    \"summary\",\n    \"environment\",\n    \"steps_to_reproduce\",\n    \"actual_result\",\n    \"expected_result\",\n    \"logs\",\n    \"attachments\",\n    \"suspected_area\",\n    \"impact\",\n]\n\nALLOWED_CHANGE_TYPES = [\"create\", \"modify\", \"delete\"]\nALLOWED_QA_VERDICTS = [\"unknown\", \"passed\", \"failed\", \"needs_rework\"]\nALLOWED_QA_NEXT_STATUSES = [\"done\","
+          },
+          {
+            "path": "agent_runner.py",
+            "reason": "Referenced by task planning context.",
+            "size_bytes": 6550,
+            "preview": "import json\nfrom copy import deepcopy\nfrom pathlib import Path\n\nfrom llm_client import LLMClientError, get_llm_client\nfrom decision_context_loader import load_decision_context_for_task\nfrom project_context_loader import load_project_context_text, list_project_context_files\n\nAGENTS_DIR = Path(\"agents\")\nAGENT_FILES = {\n    \"analyst\": \"analyst.md\",\n    \"architect\": \"architect.md\",\n    \"developer\": \"developer.md\",\n    \"qa\": \"qa.md\",\n    \"bug_intake\": \"bug_intake.md\",\n}\n\n\ndef _load_agent_prompt(agent_name: str) -> tuple[str, str]:\n    filename = AGENT_FILES.get(agent_name)\n    if filename is None:\n        raise ValueError(f\"Unknown agent: {agent_name}\")\n\n    prompt_path = AGENTS_DIR / filename\n    if not prompt_path.exists():\n        raise ValueError(f\"Agent prompt file is missing: {prompt_path.as_posix()}\")\n\n    return prompt_path.read_text(encoding=\"utf-8\"), prompt_path.as_posix()\n\n\ndef _required_schema_for_agent(agent_name: str) -> dict:\n    schemas = {\n        \"analyst\": {\n            \"artifacts\": {\"analysis\": \"string\", \"acceptance_criteria\": [\"string\"]},\n            \"message\": \"string\",\n        },\n        \"architect\": {\n            \"artifacts\": {\n                \"architecture\": \"st"
+          }
+        ],
+        "search_hits": []
+      }
+    },
+    "history": [
+      {
+        "timestamp": "2026-05-02T20:05:42Z",
+        "agent": "orchestrator",
+        "previous_status": "ready_for_dev",
+        "new_status": "ready_for_dev",
+        "message": "Added note to task.",
+        "prompt_source": null,
+        "llm_provider": null
+      },
+      {
+        "timestamp": "2026-05-02T20:05:42Z",
+        "agent": "orchestrator",
+        "previous_status": "ready_for_dev",
+        "new_status": "ready_for_dev",
+        "message": "Attached repository context in prepare_task_for_development.",
+        "prompt_source": null,
+        "llm_provider": null
+      },
+      {
+        "timestamp": "2026-05-02T20:25:51Z",
+        "agent": "orchestrator",
+        "previous_status": "ready_for_dev",
+        "new_status": "ready_for_dev",
+        "message": "Added note to task.",
+        "prompt_source": null,
+        "llm_provider": null
+      }
+    ],
+    "related_decisions": [
+      "ADR-001"
+    ],
+    "release_id": "REL-001",
+    "notes": [
+      {
+        "timestamp": "2026-05-02T20:05:42Z",
+        "author": "user",
+        "text": "Проверить, что задача готова к разработке."
+      },
+      {
+        "timestamp": "2026-05-02T20:25:51Z",
+        "author": "user",
+        "text": "проверить edge case"
+      }
+    ]
+  },
+  {
+    "id": "BUG-1",
+    "type": "bug",
+    "title": "Ошибка при запуске validate",
+    "description": "Команда validate падает на некорректных входных данных.",
+    "status": "idea",
+    "priority": "medium",
+    "severity": "medium",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [
+      "demo",
+      "bug"
+    ],
+    "estimate": null,
+    "related_decisions": [],
+    "release_id": "REL-001",
+    "artifacts": {
+      "analysis": null,
+      "acceptance_criteria": [],
+      "architecture": null,
+      "technical_risks": [],
+      "implementation_guidance": null,
+      "implementation": null,
+      "implementation_plan": {
+        "summary": "",
+        "files_to_create": [],
+        "files_to_modify": [],
+        "proposed_changes": [],
+        "commands_to_run": [],
+        "tests_to_add": [],
+        "risks": [],
+        "rollback_notes": ""
+      },
+      "patch_proposal": {
+        "summary": "",
+        "files": [],
+        "unified_diff": "",
+        "requires_approval": true,
+        "approved": false,
+        "applied": false,
+        "applied_at": null
+      },
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [],
+      "edge_cases": [],
+      "bugs": [],
+      "qa_verification": {
+        "verdict": "unknown",
+        "summary": "",
+        "checked_items": [],
+        "failed_checks": [],
+        "bugs_found": [],
+        "recommended_next_status": "review"
+      },
+      "command_results": [],
+      "repository_context": {
+        "attached": false,
+        "scanned_at": null,
+        "repo_root": ".",
+        "summary": {
+          "total_files_indexed": 0,
+          "interesting_directories": [],
+          "ignored_paths": []
+        },
+        "relevant_files": [],
+        "search_hits": []
+      },
+      "bug_report": {
+        "summary": "validate падает на части задач.",
+        "environment": "local",
+        "steps_to_reproduce": [
+          "Запустить python3 run.py validate",
+          "Наблюдать ошибку"
+        ],
+        "actual_result": "Падает с ошибкой валидации.",
+        "expected_result": "Показывает детализированную ошибку без падения процесса.",
+        "logs": [],
+        "attachments": [],
+        "suspected_area": "orchestrator validation",
+        "impact": "demo blocker"
+      }
+    },
+    "history": [],
+    "notes": []
+  },
+  {
+    "id": "TASK-2",
+    "type": "feature",
+    "title": "DEMO: Добавить healthcheck-команду",
+    "description": "E2E demo task for local MVP validation.",
+    "status": "review",
+    "priority": "medium",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [],
+    "estimate": null,
+    "artifacts": {
+      "analysis": "Structured analysis for 'DEMO: Добавить healthcheck-команду': E2E demo task for local MVP validation.",
+      "acceptance_criteria": [
+        "Core flow is clearly defined and testable.",
+        "Outcome is observable and verifiable."
+      ],
+      "architecture": "Use current repository structure and start from existing files such as 'README.md'.",
+      "technical_risks": [
+        "Task fields may drift without schema checks.",
+        "Workflow integrity can break if transitions are bypassed."
+      ],
+      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
+      "implementation": "Developer prepared deterministic implementation notes.",
+      "implementation_plan": {
+        "summary": "Implementation plan generated by fake provider.",
+        "files_to_create": [],
+        "files_to_modify": [
+          "README.md"
+        ],
+        "proposed_changes": [
+          {
+            "file_path": "README.md",
+            "change_type": "modify",
+            "reason": "Task requires implementation changes.",
+            "description": "Review project structure and apply the required behavior.",
+            "safe_to_apply": false
+          }
+        ],
+        "commands_to_run": [
+          "python -m unittest discover -s tests"
+        ],
+        "tests_to_add": [
+          "Add or update unit tests for the changed behavior."
+        ],
+        "risks": [
+          "Exact files are unknown without deeper repository inspection."
+        ],
+        "rollback_notes": "Revert modified files if validation fails."
+      },
+      "patch_proposal": {
+        "summary": "Fake provider does not generate real file changes.",
+        "files": [],
+        "unified_diff": "",
+        "requires_approval": true,
+        "approved": false,
+        "applied": false,
+        "applied_at": null
+      },
+      "changed_files": [],
+      "developer_notes": null,
+      "test_cases": [
+        "Validate happy path behavior.",
+        "Validate invalid input handling."
+      ],
+      "edge_cases": [
+        "Empty required fields.",
+        "Repeated execution on same task."
+      ],
+      "bugs": [],
+      "qa_verification": {
+        "verdict": "needs_rework",
+        "summary": "Fake QA generated checks but did not execute real tests.",
+        "checked_items": [
+          "Implementation plan exists.",
+          "Basic test scenarios were proposed."
+        ],
+        "failed_checks": [
+          "No real test command output was provided."
+        ],
+        "bugs_found": [],
+        "recommended_next_status": "review"
+      },
+      "command_results": [
+        {
+          "command": "python3 run.py validate",
+          "exit_code": 0,
+          "success": true,
+          "stdout": "Validation passed: 3 task(s) are valid.\n",
+          "stderr": "",
+          "started_at": "2026-05-02T19:28:14Z",
+          "finished_at": "2026-05-02T19:28:14Z",
+          "duration_seconds": 0.063,
+          "source": "e2e_demo",
+          "working_directory": "."
+        },
+        {
+          "command": "python3 -m unittest discover -s tests",
+          "exit_code": 0,
+          "success": true,
+          "stdout": "TASK-2: added dependency on TASK-1\nTASK-1: blocker set.\nTASK-1: blocker cleared.\nTASK-2: added dependency on TASK-1\n{\n  \"command\": \"python run.py validate\",\n  \"exit_code\": 0,\n  \"success\": true,\n  \"stdout\": \"ok\",\n  \"stderr\": \"\",\n  \"started_at\": \"2026-05-02T12:00:00Z\",\n  \"finished_at\": \"2026-05-02T12:00:01Z\",\n  \"duration_seconds\": 1.0,\n  \"source\": \"manual\",\n  \"working_directory\": \".\"\n}\nDemo-данные сброшены.\nDemo-данные сброшены.\nDemo-данные созданы: TASK-1, BUG-1, ADR-001, REL-001\n=== Doctor: проверка готовности MVP ===\nPython executable: /opt/homebrew/opt/python@3.14/bin/python3.14\nPython version: 3.14.3\nРабочая директория: /private/var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpunqtfk6b\n\nПроверка директорий:\n- agents: OK\n- project_context: OK\n- tasks: OK\n- releases: OK\n- decisions: OK\n- artifacts: OK\n- docs: OK\n\nПроверка файлов:\n- README.md: MISSING\n- CLAUDE.md: OK\n- AGENTS.md: OK\n- tasks/tasks.json: OK\n- releases/releases.json: OK\n- decisions/index.json: OK\n- agents/analyst.md: OK\n- agents/architect.md: OK\n- agents/developer.md: OK\n- agents/qa.md: OK\n- agents/bug_intake.md: OK\n- agents/supervisor.md: OK\n\nПроверка задач:\n- validate_all_tasks: OK, задач=0\nПроверка релизов:\n- load_releases: OK, релизов=0\nПроверка решений:\n- load_decision_index: OK, решений=0\n\nLLM конфигурация:\n- LLM_PROVIDER: fake\n- CLAUDE_CODE_BINARY: claude\n- Claude configured: true\n\nTelegram конфигурация:\n- TELEGRAM_BOT_TOKEN_SET: false\n- TELEGRAM_OWNER_ID_SET: false\n- TELEGRAM_DRY_RUN_BY_DEFAULT: true\n\nПредупреждения:\n- TELEGRAM_BOT_TOKEN не задан.\n- TELEGRAM_OWNER_ID не задан.\n- OPENAI_API_KEY не задан (не критично).\n\nПодсказка для тестов:\npython3 -m unittest discover -s tests\n\n❌ Найдены проблемы\nTASK-1: patch proposal approved.\nTASK-1: repository context attached.\nExported patch proposal to /var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpjsps5dbq/patch.md\nExported patch proposal to /var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpjsps5dbq/patch.md\nCreated release REL-001 (v0.1.0)\nTASK-1: added to REL-001\nExported release notes to /var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpighk1pe0/notes.md\nExported release notes to /var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpighk1pe0/notes.md\nExported rollback plan to /var/folders/z8/jpgchy9j2y58sv732fgpvg440000gp/T/tmpighk1pe0/rollback.md\nCreated release REL-001 (v0.1.0)\nTASK-1: added to REL-001\n",
+          "stderr": "..............................................................................................\n----------------------------------------------------------------------\nRan 94 tests in 0.328s\n\nOK\n",
+          "started_at": "2026-05-02T19:28:14Z",
+          "finished_at": "2026-05-02T19:28:15Z",
+          "duration_seconds": 0.412,
+          "source": "e2e_demo",
+          "working_directory": "."
+        }
+      ],
+      "repository_context": {
+        "attached": true,
+        "scanned_at": "2026-05-02T19:28:14Z",
+        "repo_root": ".",
+        "summary": {
+          "total_files_indexed": 66,
+          "interesting_directories": [
+            ".idea",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "README.md",
+            "agent_runner.py",
+            "agents",
+            "artifacts",
+            "backlog.py",
+            "command_runner.py",
+            "decision_context_loader.py",
+            "decision_log.py",
+            "decisions",
+            "docs",
+            "llm_client.py",
+            "orchestrator.py",
+            "patch_utils.py",
+            "project_context",
+            "project_context_loader.py",
+            "release_manager.py",
+            "releases",
+            "repo_inspector.py",
+            "requirements.txt",
+            "run.py",
+            "supervisor.py",
+            "tasks",
+            "telegram_bot.py",
+            "tests",
+            "work-items"
+          ],
+          "ignored_paths": [
+            ".git",
+            ".git/COMMIT_EDITMSG",
+            ".git/HEAD",
+            ".git/config",
+            ".git/description",
+            ".git/hooks",
+            ".git/hooks/applypatch-msg.sample",
+            ".git/hooks/commit-msg.sample",
+            ".git/hooks/fsmonitor-watchman.sample",
+            ".git/hooks/post-update.sample",
+            ".git/hooks/pre-applypatch.sample",
+            ".git/hooks/pre-commit.sample",
+            ".git/hooks/pre-merge-commit.sample",
+            ".git/hooks/pre-push.sample",
+            ".git/hooks/pre-rebase.sample",
+            ".git/hooks/pre-receive.sample",
+            ".git/hooks/prepare-commit-msg.sample",
+            ".git/hooks/push-to-checkout.sample",
+            ".git/hooks/sendemail-validate.sample",
+            ".git/hooks/update.sample",
+            ".git/index",
+            ".git/info",
+            ".git/info/exclude",
+            ".git/logs",
+            ".git/logs/HEAD",
+            ".git/logs/refs",
+            ".git/logs/refs/heads",
+            ".git/logs/refs/heads/main",
+            ".git/logs/refs/remotes",
+            ".git/logs/refs/remotes/origin",
+            ".git/logs/refs/remotes/origin/main",
+            ".git/objects",
+            ".git/objects/00",
+            ".git/objects/00/5ed3d00e829d22774d773e0bc665ae4b510e0c",
+            ".git/objects/01",
+            ".git/objects/01/316eec18733a19f7e41eff5c356cf9ce9e0f3f",
+            ".git/objects/03",
+            ".git/objects/03/ad6008613546b5a56517b1ca12405169aacd44",
+            ".git/objects/04",
+            ".git/objects/04/1a8e3cfb0565b3f5df7c8b2fadddeb8e227693",
+            ".git/objects/05",
+            ".git/objects/05/57cd437178a214927e844ffd5ae36c97012bf3",
+            ".git/objects/05/af1d2db37887ecbc7521b99dec299ee2558d91",
+            ".git/objects/06",
+            ".git/objects/06/a600b67ba52642fbbb7aaf5a8be1cbc30af027",
             ".git/objects/07",
             ".git/objects/07/fc5574b24b14f2415b5c121863f32e6f03f19e",
             ".git/objects/09",
@@ -156,18 +576,29 @@
             ".git/objects/12/9cf735c84a2d9ee9639ced11721cc8c92a37be",
             ".git/objects/13",
             ".git/objects/13/10d6edf758d11559ff36d4915ff008b964f11b",
+            ".git/objects/13/f46c676bba85092f82a6396565e24e5824f7a1",
+            ".git/objects/14",
+            ".git/objects/14/18de710e56987466310708e7d404910461a675",
+            ".git/objects/14/395c268d43fa8db7c8ad6301b42d17c2c5fbb3",
+            ".git/objects/14/5ff6746ff66e2ee097533837ebdaa558ea0a24",
             ".git/objects/15",
             ".git/objects/15/81e8b41f498e2f17bc958b2abae8203a85658e",
             ".git/objects/15/bca6354568b5b5be73c6f570e18c69c705b34f",
             ".git/objects/16",
+            ".git/objects/16/144daffbe2fd82be33930733d2ff9b106e7501",
             ".git/objects/16/38c78fa82cb828a504b2849bd130445e351d76",
             ".git/objects/16/96901e95324a71bc5aa8be740b2dfab8d9cd37",
             ".git/objects/18",
+            ".git/objects/18/7158cc40f6c9e96c9eea550f39ef22aece52a8",
             ".git/objects/18/e1c2cdbe33a9f9dc75b5419086183fcafcb7f4",
             ".git/objects/1f",
             ".git/objects/1f/8d68d17b45a588614ce4062479e3a72fad25bc",
+            ".git/objects/22",
+            ".git/objects/22/48919818f624710aebbce15295a08b771cc1fb",
+            ".git/objects/22/fb321097e28b44a38a4d325d7bb2c521fce22f",
             ".git/objects/28",
             ".git/objects/28/679086ec0fa5f365967633042a4f306596f79d",
+            ".git/objects/28/dcd865b008118417428a09aae24c04cb3861a4",
             ".git/objects/29",
             ".git/objects/29/99a6a09aa4005b535f0881b789c57f17961fc4",
             ".git/objects/2a",
@@ -177,64 +608,46 @@
             ".git/objects/2b/4555c204b46f97258b71cccc39604dd127ad87",
             ".git/objects/2d",
             ".git/objects/2d/9b9443f6f4b6ccd6ea38429c77663537b97e35",
+            ".git/objects/2e",
+            ".git/objects/2e/9342d22fa6b9b59d32ba4b1ccac22335d0cda5",
             ".git/objects/31",
             ".git/objects/31/9db604105e4a64e8755fc62e2bd65f69c6bb1a",
             ".git/objects/33",
             ".git/objects/33/2f4b5daa0855176fc675e2efe508e6d426a787",
             ".git/objects/33/431fed522505d2ebcfc8c7a50ca073404691cd",
-            ".git/objects/33/ef206b3c279f69eb8d45ffd17cb10467ed3c25",
-            ".git/objects/34",
-            ".git/objects/34/0435173f24013ecaab58ca8f8480ba27ff6cd2",
-            ".git/objects/38",
-            ".git/objects/38/4f20f8cbf56452e328245a1859dd698e0dcad5",
-            ".git/objects/38/b9f4e58cfca8241cd4039d18fb12621011701e",
-            ".git/objects/38/bebfc83479e9cf53d8950ef0194d2a5b8623a7",
-            ".git/objects/3a",
-            ".git/objects/3a/2b7455314e4189197810b40c5dca690b5617cb",
-            ".git/objects/3c",
-            ".git/objects/3c/35b37e2d3085c5b95960d9b4342c3767ce5591",
-            ".git/objects/3f",
-            ".git/objects/3f/e5fcdd00c161c2a18b7cc4c35ca85ab402d85e",
-            ".git/objects/40",
-            ".git/objects/40/5e4efe7f89caec00e768ce9112d0ee35875856",
-            ".git/objects/40/be5f84a35181cbba471d590f68064167bba858",
-            ".git/objects/40/f5587f27eb5cd50af3a6880c072de5cb9643f3",
-            ".git/objects/42",
-            ".git/objects/42/e582687ab93b5d997c5910b7e95646dbe19b3e",
-            ".git/objects/43",
-            ".git/objects/43/c6e51fdbe0a74aab4be5e8761453e4fc9b090b"
+            ".git/objects/33/ef206b3c279f69eb8d45ffd17cb10467ed3c25"
           ]
         },
         "relevant_files": [
           {
             "path": "README.md",
             "reason": "Referenced by task planning context.",
-            "size_bytes": 3136,
-            "preview": "# Multi-Agent Project Management MVP\n\n## Purpose\nDeterministic multi-agent workflow for feature and bug tasks with orchestrator-owned transitions.\n\n## Command Execution Layer\nThe system can run only allowlisted local validation commands and store results in task artifacts.\n\n`command_results` stores:\n- command\n- exit_code\n- success\n- stdout/stderr\n- started_at/finished_at\n- duration_seconds\n- source\n- working_directory\n\n### Allowed commands\n- `python -m unittest discover -s tests`\n- `python run.py validate`\n- `python run.py agents`\n- `python run.py config`\n- `python run.py context`\n- `python run.py list`\n\nArbitrary commands are rejected.\nImplementation uses `subprocess.run(..., shell=False)` only.\n\n### CLI\n```bash\npython run.py commands\npython run.py run-command --id TASK-1 --command \"python -m unittest discover -s tests\"\npython run.py run-plan-commands --id TASK-1\npython run.py command-results --id TASK-1\n```\n\nCommand results are available to QA as evidence.\n\n## Repository Inspection Layer\nThe system supports safe read-only repository inspection and can attach structured repository context to a task.\n\nRepository inspection is constrained:\n- read-only only\n- no absolute paths\n- no `"
+            "size_bytes": 9647,
+            "preview": "# Team of Agents\n\n## Что это\n\nЛокальная система управления разработкой с AI-агентами.\nОна помогает вести идеи, задачи и баги, поддерживает backlog, релизы, ADR-решения, QA-проверки и управляемый workflow между агентами.\n\n## Зачем это нужно\n\n- превращать идеи в структурированные задачи\n- заводить баги из сырого текста и логов\n- прогонять задачи через `Analyst -> Architect -> Developer -> QA`\n- хранить архитектурные решения (ADR)\n- управлять backlog, зависимостями и блокерами\n- собирать релизные пакеты и проверять readiness\n- готовить developer plan, QA report, release notes\n- в будущем подключить Telegram-слой\n\n## Как устроена система\n\n- `run.py` — основной CLI\n- `orchestrator.py` — управление состояниями задач и переходами workflow\n- `agent_runner.py` — запуск агентных промптов и парсинг JSON-ответов\n- `llm_client.py` — выбор и вызов LLM-провайдера (`fake`, `claude_code`, `openai`)\n- `supervisor.py` — планирование/безопасное выполнение действий из natural language\n- `backlog.py` — логика ready/blocked и сортировка backlog\n- `release_manager.py` — релизы, readiness, release notes/risks/rollback\n- `decision_log.py` — ADR-слой (`decisions/index.json` + `decisions/ADR-*.md`)\n- `repo_in"
           },
           {
             "path": "AGENTS.md",
             "reason": "Referenced by task planning context.",
-            "size_bytes": 2044,
-            "preview": "# AGENTS.md\n\n## Core Ownership\n- `orchestrator.py` owns status transitions and gates.\n- `agent_runner.py` owns prompt execution and JSON parsing.\n- `llm_client.py` owns provider selection.\n- `command_runner.py` is the only command execution layer.\n- `repo_inspector.py` is the only repository inspection layer.\n- `project_context/*.md` stores reusable project knowledge.\n\n## Command Execution Rules\n- LLM must never execute commands directly.\n- Only allowlisted commands may run.\n- No arbitrary shell execution.\n- Always run subprocess with `shell=False`.\n- No destructive commands.\n- Command outputs must be saved in `command_results`.\n- QA may use `command_results` as evidence.\n- QA must not claim tests were executed without `command_results` evidence.\n\n## Workflow Rules\n- Statuses: `idea`, `refined`, `ready_for_dev`, `in_progress`, `review`, `done`.\n- LLM output must never directly set status.\n- All persisted state changes go through `orchestrator.py`.\n- Repository inspection is read-only only.\n- Agents must use attached `repository_context` when available, instead of guessing file paths.\n\n## Developer Rules\n- Developer may produce `implementation_plan` and `patch_proposal`.\n- `patch_pr"
+            "size_bytes": 4750,
+            "preview": "# AGENTS.md\n\n## Core Ownership\n- `orchestrator.py` owns status transitions and gates.\n- `agent_runner.py` owns prompt execution and JSON parsing.\n- `llm_client.py` owns provider selection.\n- `command_runner.py` is the only command execution layer.\n- `repo_inspector.py` is the only repository inspection layer.\n- `backlog.py` owns dependency/readiness logic.\n- `decisions/` is the source of architectural decision memory.\n- `release_manager.py` owns release metadata and readiness calculations.\n- Supervisor maps natural language to safe explicit actions.\n- `project_context/*.md` stores reusable project knowledge.\n- `CLAUDE.md` is the project instruction file for Claude Code.\n\n## Command Execution Rules\n- LLM must never execute commands directly.\n- Only allowlisted commands may run.\n- No arbitrary shell execution.\n- Always run subprocess with `shell=False`.\n- No destructive commands.\n- Command outputs must be saved in `command_results`.\n- QA may use `command_results` as evidence.\n- QA must not claim tests were executed without `command_results` evidence.\n\n## Workflow Rules\n- Statuses: `idea`, `refined`, `ready_for_dev`, `in_progress`, `review`, `done`.\n- LLM output must never directly se"
           },
           {
             "path": "run.py",
             "reason": "Referenced by task planning context.",
-            "size_bytes": 22058,
-            "preview": "import argparse\nimport json\nimport os\nimport sys\n\nimport orchestrator\nfrom command_runner import ALLOWED_COMMANDS, is_command_allowed, run_safe_command\nfrom llm_client import LLMClientError, get_llm_client\nfrom orchestrator import (\n    add_history_event,\n    create_bug,\n    create_task,\n    get_task,\n    get_task_implementation_plan,\n    get_task_patch_proposal,\n    list_available_agents,\n    list_tasks,\n    run_all_ready_tasks,\n    run_next_for_task,\n    validate_all_tasks,\n)\nfrom patch_utils import apply_patch_proposal, approve_patch, export_patch_proposal\nfrom project_context_loader import load_project_context, load_project_context_text, list_project_context_files\nfrom repo_inspector import (\n    build_repository_context_for_task,\n    list_repository_tree,\n    read_repository_file,\n    scan_repository,\n    search_repository,\n)\n\n\ndef _format_plan_markdown(task_id: str, plan: dict) -> str:\n    lines = [f\"# Developer Plan for {task_id}\", \"\", \"## Summary\", \"\", plan.get(\"summary\", \"\"), \"\"]\n\n    def add_list_section(title: str, values):\n        lines.append(f\"## {title}\")\n        lines.append(\"\")\n        if values:\n            for item in values:\n                lines.append(f\"- {ite"
+            "size_bytes": 60452,
+            "preview": "import argparse\nimport json\nimport os\nimport shutil\nimport sys\nfrom pathlib import Path\n\nimport backlog\nimport orchestrator\nfrom command_runner import ALLOWED_COMMANDS, is_command_allowed, run_safe_command\nfrom decision_log import load_decision_index\nfrom llm_client import LLMClientError, get_llm_client\nfrom decision_log import (\n    create_decision,\n    get_decision_by_id,\n    get_task_related_decisions,\n    link_decision_to_task,\n    list_decisions,\n    read_decision_file,\n    unlink_decision_from_task,\n)\nfrom orchestrator import (\n    add_history_event,\n    create_bug,\n    create_task,\n    get_task,\n    get_task_implementation_plan,\n    get_task_patch_proposal,\n    list_available_agents,\n    list_tasks,\n    run_all_ready_tasks,\n    run_next_for_task,\n    validate_all_tasks,\n)\nfrom patch_utils import apply_patch_proposal, approve_patch, export_patch_proposal\nfrom project_context_loader import load_project_context, load_project_context_text, list_project_context_files\nfrom release_manager import (\n    add_task_to_release,\n    calculate_release_readiness,\n    create_release,\n    generate_release_notes,\n    generate_release_risks,\n    generate_rollback_plan,\n    get_release_by_id,\n "
           },
           {
             "path": "orchestrator.py",
             "reason": "Referenced by task planning context.",
-            "size_bytes": 32227,
-            "preview": "import json\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Dict, List, Optional, Tuple\n\nfrom agent_runner import AGENT_FILES, AGENTS_DIR, run_agent\nfrom llm_client import BaseLLMClient, get_llm_client\n\nTASKS_PATH = Path(\"tasks\") / \"tasks.json\"\n\nALLOWED_TYPES = [\"feature\", \"bug\"]\nALLOWED_STATUSES = [\n    \"idea\",\n    \"refined\",\n    \"ready_for_dev\",\n    \"in_progress\",\n    \"review\",\n    \"done\",\n]\n\nREQUIRED_ARTIFACT_FIELDS = [\n    \"analysis\",\n    \"acceptance_criteria\",\n    \"architecture\",\n    \"technical_risks\",\n    \"implementation_guidance\",\n    \"implementation\",\n    \"implementation_plan\",\n    \"patch_proposal\",\n    \"changed_files\",\n    \"developer_notes\",\n    \"test_cases\",\n    \"edge_cases\",\n    \"bugs\",\n    \"qa_verification\",\n    \"command_results\",\n    \"repository_context\",\n]\n\nREQUIRED_BUG_REPORT_FIELDS = [\n    \"summary\",\n    \"environment\",\n    \"steps_to_reproduce\",\n    \"actual_result\",\n    \"expected_result\",\n    \"logs\",\n    \"attachments\",\n    \"suspected_area\",\n    \"impact\",\n]\n\nALLOWED_CHANGE_TYPES = [\"create\", \"modify\", \"delete\"]\nALLOWED_QA_VERDICTS = [\"unknown\", \"passed\", \"failed\", \"needs_rework\"]\nALLOWED_QA_NEXT_STATUSES = [\"done\", \"ready_for_dev\", "
+            "size_bytes": 34595,
+            "preview": "import json\nfrom datetime import datetime, timezone\nfrom pathlib import Path\nfrom typing import Dict, List, Optional, Tuple\n\nimport backlog\nfrom agent_runner import AGENT_FILES, AGENTS_DIR, run_agent\nfrom llm_client import BaseLLMClient, get_llm_client\n\nTASKS_PATH = Path(\"tasks\") / \"tasks.json\"\n\nALLOWED_TYPES = [\"feature\", \"bug\"]\nALLOWED_STATUSES = [\n    \"idea\",\n    \"refined\",\n    \"ready_for_dev\",\n    \"in_progress\",\n    \"review\",\n    \"done\",\n]\n\nREQUIRED_ARTIFACT_FIELDS = [\n    \"analysis\",\n    \"acceptance_criteria\",\n    \"architecture\",\n    \"technical_risks\",\n    \"implementation_guidance\",\n    \"implementation\",\n    \"implementation_plan\",\n    \"patch_proposal\",\n    \"changed_files\",\n    \"developer_notes\",\n    \"test_cases\",\n    \"edge_cases\",\n    \"bugs\",\n    \"qa_verification\",\n    \"command_results\",\n    \"repository_context\",\n]\n\nREQUIRED_BUG_REPORT_FIELDS = [\n    \"summary\",\n    \"environment\",\n    \"steps_to_reproduce\",\n    \"actual_result\",\n    \"expected_result\",\n    \"logs\",\n    \"attachments\",\n    \"suspected_area\",\n    \"impact\",\n]\n\nALLOWED_CHANGE_TYPES = [\"create\", \"modify\", \"delete\"]\nALLOWED_QA_VERDICTS = [\"unknown\", \"passed\", \"failed\", \"needs_rework\"]\nALLOWED_QA_NEXT_STATUSES = [\"done\", \"r"
           },
           {
             "path": "agent_runner.py",
             "reason": "Referenced by task planning context.",
-            "size_bytes": 6377,
-            "preview": "import json\nfrom copy import deepcopy\nfrom pathlib import Path\n\nfrom llm_client import LLMClientError, get_llm_client\nfrom project_context_loader import load_project_context_text, list_project_context_files\n\nAGENTS_DIR = Path(\"agents\")\nAGENT_FILES = {\n    \"analyst\": \"analyst.md\",\n    \"architect\": \"architect.md\",\n    \"developer\": \"developer.md\",\n    \"qa\": \"qa.md\",\n    \"bug_intake\": \"bug_intake.md\",\n}\n\n\ndef _load_agent_prompt(agent_name: str) -> tuple[str, str]:\n    filename = AGENT_FILES.get(agent_name)\n    if filename is None:\n        raise ValueError(f\"Unknown agent: {agent_name}\")\n\n    prompt_path = AGENTS_DIR / filename\n    if not prompt_path.exists():\n        raise ValueError(f\"Agent prompt file is missing: {prompt_path.as_posix()}\")\n\n    return prompt_path.read_text(encoding=\"utf-8\"), prompt_path.as_posix()\n\n\ndef _required_schema_for_agent(agent_name: str) -> dict:\n    schemas = {\n        \"analyst\": {\n            \"artifacts\": {\"analysis\": \"string\", \"acceptance_criteria\": [\"string\"]},\n            \"message\": \"string\",\n        },\n        \"architect\": {\n            \"artifacts\": {\n                \"architecture\": \"string\",\n                \"technical_risks\": [\"string\"],\n             "
+            "size_bytes": 6550,
+            "preview": "import json\nfrom copy import deepcopy\nfrom pathlib import Path\n\nfrom llm_client import LLMClientError, get_llm_client\nfrom decision_context_loader import load_decision_context_for_task\nfrom project_context_loader import load_project_context_text, list_project_context_files\n\nAGENTS_DIR = Path(\"agents\")\nAGENT_FILES = {\n    \"analyst\": \"analyst.md\",\n    \"architect\": \"architect.md\",\n    \"developer\": \"developer.md\",\n    \"qa\": \"qa.md\",\n    \"bug_intake\": \"bug_intake.md\",\n}\n\n\ndef _load_agent_prompt(agent_name: str) -> tuple[str, str]:\n    filename = AGENT_FILES.get(agent_name)\n    if filename is None:\n        raise ValueError(f\"Unknown agent: {agent_name}\")\n\n    prompt_path = AGENTS_DIR / filename\n    if not prompt_path.exists():\n        raise ValueError(f\"Agent prompt file is missing: {prompt_path.as_posix()}\")\n\n    return prompt_path.read_text(encoding=\"utf-8\"), prompt_path.as_posix()\n\n\ndef _required_schema_for_agent(agent_name: str) -> dict:\n    schemas = {\n        \"analyst\": {\n            \"artifacts\": {\"analysis\": \"string\", \"acceptance_criteria\": [\"string\"]},\n            \"message\": \"string\",\n        },\n        \"architect\": {\n            \"artifacts\": {\n                \"architecture\": \"st"
           }
         ],
         "search_hits": []
@@ -242,313 +655,16 @@
     },
     "history": [
       {
+        "timestamp": "2026-05-02T19:28:14Z",
+        "agent": "orchestrator",
         "previous_status": "idea",
-        "new_status": "refined",
-        "agent": "analyst",
-        "message": "Task refined with requirements and acceptance criteria.",
-        "timestamp": "2026-05-02T11:56:09+00:00"
-      },
-      {
-        "previous_status": "refined",
-        "new_status": "ready_for_dev",
-        "agent": "architect",
-        "message": "Architecture notes, risks, and implementation guidance added.",
-        "timestamp": "2026-05-02T11:56:09+00:00"
-      },
-      {
-        "previous_status": "ready_for_dev",
-        "new_status": "in_progress",
-        "agent": "developer",
-        "message": "Implementation started and development notes added.",
-        "timestamp": "2026-05-02T11:56:09+00:00"
-      },
-      {
-        "previous_status": "in_progress",
-        "new_status": "review",
-        "agent": "qa",
-        "message": "QA test cases and edge-case checks prepared for review.",
-        "timestamp": "2026-05-02T11:56:20+00:00"
-      },
-      {
-        "previous_status": "review",
-        "new_status": "done",
-        "agent": "system",
-        "message": "Review approved; task completed.",
-        "timestamp": "2026-05-02T11:56:20+00:00"
-      },
-      {
-        "timestamp": "2026-05-02T14:29:16Z",
-        "agent": "orchestrator",
-        "previous_status": "done",
-        "new_status": "done",
-        "message": "Executed command: python run.py validate",
-        "prompt_source": null,
-        "llm_provider": null
-      },
-      {
-        "timestamp": "2026-05-02T14:29:24Z",
-        "agent": "orchestrator",
-        "previous_status": "done",
-        "new_status": "done",
-        "message": "Executed command: python run.py validate",
-        "prompt_source": null,
-        "llm_provider": null
-      },
-      {
-        "timestamp": "2026-05-02T14:38:07Z",
-        "agent": "orchestrator",
-        "previous_status": "done",
-        "new_status": "done",
-        "message": "Attached repository context to task.",
-        "prompt_source": null,
-        "llm_provider": null
-      },
-      {
-        "timestamp": "2026-05-02T15:34:46Z",
-        "agent": "orchestrator",
-        "previous_status": "done",
-        "new_status": "done",
-        "message": "Linked decision ADR-001 to task.",
-        "prompt_source": null,
-        "llm_provider": null
-      },
-      {
-        "timestamp": "2026-05-02T15:42:46Z",
-        "agent": "orchestrator",
-        "previous_status": "done",
-        "new_status": "done",
-        "message": "Added task to release REL-001.",
-        "prompt_source": null,
-        "llm_provider": null
-      }
-    ],
-    "type": "feature",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [
-      "ADR-001"
-    ],
-    "release_id": "REL-001"
-  },
-  {
-    "id": "BUG-1",
-    "type": "bug",
-    "title": "Login error",
-    "description": "Login fails with 500",
-    "status": "ready_for_dev",
-    "priority": "medium",
-    "severity": "unknown",
-    "raw_input": "When I enter valid credentials, API returns HTTP 500. Logs: NullPointerException in AuthService.",
-    "artifacts": {
-      "bug_report": {
-        "summary": "Structured bug summary from raw input.",
-        "environment": "unknown",
-        "steps_to_reproduce": [
-          "Open affected functionality",
-          "Perform the reported action",
-          "Observe the actual result"
-        ],
-        "actual_result": "Reported behavior occurs.",
-        "expected_result": "System should behave according to requirements.",
-        "logs": [],
-        "attachments": [],
-        "suspected_area": "unknown",
-        "impact": "Needs investigation."
-      },
-      "analysis": "Structured analysis for 'Login error': Login fails with 500",
-      "acceptance_criteria": [
-        "Core flow is clearly defined and testable.",
-        "Outcome is observable and verifiable."
-      ],
-      "architecture": "Use a simple modular structure with explicit workflow boundaries.",
-      "technical_risks": [
-        "Task fields may drift without schema checks.",
-        "Workflow integrity can break if transitions are bypassed."
-      ],
-      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
-      "implementation": null,
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T12:37:46Z",
-        "agent": "bug_intake",
-        "previous_status": null,
         "new_status": "idea",
-        "message": "Bug Intake created a structured bug report.",
-        "prompt_source": "agents/bug_intake.md",
-        "llm_provider": "fake"
+        "message": "Attached repository context in e2e-demo.",
+        "prompt_source": null,
+        "llm_provider": null
       },
       {
-        "timestamp": "2026-05-02T12:37:46Z",
-        "agent": "analyst",
-        "previous_status": "idea",
-        "new_status": "refined",
-        "message": "Analyst refined the raw idea into structured requirements.",
-        "prompt_source": "agents/analyst.md",
-        "llm_provider": "fake"
-      },
-      {
-        "timestamp": "2026-05-02T12:37:54Z",
-        "agent": "architect",
-        "previous_status": "refined",
-        "new_status": "ready_for_dev",
-        "message": "Architect prepared implementation guidance.",
-        "prompt_source": "agents/architect.md",
-        "llm_provider": "fake"
-      }
-    ],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-2",
-    "type": "feature",
-    "title": "Add healthcheck command",
-    "description": "Add a simple CLI command that prints system health status.",
-    "status": "review",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": "Structured analysis for 'Add healthcheck command': Add a simple CLI command that prints system health status.",
-      "acceptance_criteria": [
-        "Core flow is clearly defined and testable.",
-        "Outcome is observable and verifiable."
-      ],
-      "architecture": "Use a simple modular structure with explicit workflow boundaries.",
-      "technical_risks": [
-        "Task fields may drift without schema checks.",
-        "Workflow integrity can break if transitions are bypassed."
-      ],
-      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
-      "implementation": "Developer prepared deterministic implementation notes.",
-      "implementation_plan": {
-        "summary": "Implementation plan generated by fake provider.",
-        "files_to_create": [],
-        "files_to_modify": [
-          "unknown"
-        ],
-        "proposed_changes": [
-          {
-            "file_path": "unknown",
-            "change_type": "modify",
-            "reason": "Task requires implementation changes.",
-            "description": "Review project structure and apply the required behavior.",
-            "safe_to_apply": false
-          }
-        ],
-        "commands_to_run": [
-          "python -m unittest discover -s tests"
-        ],
-        "tests_to_add": [
-          "Add or update unit tests for the changed behavior."
-        ],
-        "risks": [
-          "Exact files are unknown without deeper repository inspection."
-        ],
-        "rollback_notes": "Revert modified files if validation fails."
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [
-        "Validate happy path behavior.",
-        "Validate invalid input handling."
-      ],
-      "edge_cases": [
-        "Empty required fields.",
-        "Repeated execution on same task."
-      ],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "needs_rework",
-        "summary": "Fake QA generated checks but did not execute real tests.",
-        "checked_items": [
-          "Implementation plan exists.",
-          "Basic test scenarios were proposed."
-        ],
-        "failed_checks": [
-          "No real test command output was provided."
-        ],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T12:59:12Z",
+        "timestamp": "2026-05-02T19:28:14Z",
         "agent": "analyst",
         "previous_status": "idea",
         "new_status": "refined",
@@ -566,7 +682,7 @@
         ]
       },
       {
-        "timestamp": "2026-05-02T12:59:12Z",
+        "timestamp": "2026-05-02T19:28:14Z",
         "agent": "architect",
         "previous_status": "refined",
         "new_status": "ready_for_dev",
@@ -584,11 +700,11 @@
         ]
       },
       {
-        "timestamp": "2026-05-02T12:59:13Z",
+        "timestamp": "2026-05-02T19:28:14Z",
         "agent": "developer",
         "previous_status": "ready_for_dev",
         "new_status": "in_progress",
-        "message": "Developer prepared a structured implementation plan.",
+        "message": "Developer prepared implementation plan and patch proposal.",
         "prompt_source": "agents/developer.md",
         "llm_provider": "fake",
         "context_files_used": [
@@ -602,16 +718,16 @@
         ]
       },
       {
-        "timestamp": "2026-05-02T15:09:25Z",
+        "timestamp": "2026-05-02T19:28:15Z",
         "agent": "orchestrator",
         "previous_status": "in_progress",
         "new_status": "in_progress",
-        "message": "Added dependency: TASK-2 depends on TASK-1.",
+        "message": "Recorded e2e-demo command results.",
         "prompt_source": null,
         "llm_provider": null
       },
       {
-        "timestamp": "2026-05-02T15:09:26Z",
+        "timestamp": "2026-05-02T19:28:15Z",
         "agent": "qa",
         "previous_status": "in_progress",
         "new_status": "review",
@@ -629,23 +745,22 @@
         ]
       }
     ],
-    "depends_on": [
-      "TASK-1"
-    ],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
     "related_decisions": [],
-    "release_id": null
+    "release_id": "REL-002",
+    "notes": []
   },
   {
     "id": "TASK-3",
     "type": "feature",
-    "title": "Add healthcheck command",
-    "description": "Add a simple healthcheck command.",
+    "title": "PM mode test task",
+    "description": "Test high-level PM flow.",
     "status": "idea",
     "priority": "medium",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [],
+    "estimate": null,
     "artifacts": {
       "analysis": null,
       "acceptance_criteria": [],
@@ -663,6 +778,15 @@
         "risks": [],
         "rollback_notes": ""
       },
+      "patch_proposal": {
+        "summary": "",
+        "files": [],
+        "unified_diff": "",
+        "requires_approval": true,
+        "approved": false,
+        "applied": false,
+        "applied_at": null
+      },
       "changed_files": [],
       "developer_notes": null,
       "test_cases": [],
@@ -675,15 +799,6 @@
         "failed_checks": [],
         "bugs_found": [],
         "recommended_next_status": "review"
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
       },
       "command_results": [],
       "repository_context": {
@@ -700,479 +815,15 @@
       }
     },
     "history": [],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
+    "notes": [],
     "related_decisions": [],
     "release_id": null
   },
   {
     "id": "TASK-4",
     "type": "feature",
-    "title": "Add healthcheck command",
-    "description": "Add a simple healthcheck command.",
-    "status": "ready_for_dev",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": "Structured analysis for 'Add healthcheck command': Add a simple healthcheck command.",
-      "acceptance_criteria": [
-        "Core flow is clearly defined and testable.",
-        "Outcome is observable and verifiable."
-      ],
-      "architecture": "Use a simple modular structure with explicit workflow boundaries.",
-      "technical_risks": [
-        "Task fields may drift without schema checks.",
-        "Workflow integrity can break if transitions are bypassed."
-      ],
-      "implementation_guidance": "Implement in small deterministic steps with validation-first checks.",
-      "implementation": "Developer prepared deterministic implementation notes.",
-      "implementation_plan": {
-        "summary": "Implementation plan generated by fake provider.",
-        "files_to_create": [],
-        "files_to_modify": [
-          "unknown"
-        ],
-        "proposed_changes": [
-          {
-            "file_path": "unknown",
-            "change_type": "modify",
-            "reason": "Task requires implementation changes.",
-            "description": "Review project structure and apply the required behavior.",
-            "safe_to_apply": false
-          }
-        ],
-        "commands_to_run": [
-          "python -m unittest discover -s tests"
-        ],
-        "tests_to_add": [
-          "Add or update unit tests for the changed behavior."
-        ],
-        "risks": [
-          "Exact files are unknown without deeper repository inspection."
-        ],
-        "rollback_notes": "Revert modified files if validation fails."
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [
-        "Validate happy path behavior.",
-        "Validate invalid input handling."
-      ],
-      "edge_cases": [
-        "Empty required fields.",
-        "Repeated execution on same task."
-      ],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "needs_rework",
-        "summary": "Fake QA generated checks but did not execute real tests.",
-        "checked_items": [
-          "Implementation plan exists.",
-          "Basic test scenarios were proposed."
-        ],
-        "failed_checks": [
-          "No real test command output was provided."
-        ],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T13:19:01Z",
-        "agent": "analyst",
-        "previous_status": "idea",
-        "new_status": "refined",
-        "message": "Analyst refined the raw idea into structured requirements.",
-        "prompt_source": "agents/analyst.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      },
-      {
-        "timestamp": "2026-05-02T13:19:01Z",
-        "agent": "architect",
-        "previous_status": "refined",
-        "new_status": "ready_for_dev",
-        "message": "Architect prepared implementation guidance.",
-        "prompt_source": "agents/architect.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      },
-      {
-        "timestamp": "2026-05-02T13:19:01Z",
-        "agent": "developer",
-        "previous_status": "ready_for_dev",
-        "new_status": "in_progress",
-        "message": "Developer prepared a structured implementation plan.",
-        "prompt_source": "agents/developer.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      },
-      {
-        "timestamp": "2026-05-02T13:19:01Z",
-        "agent": "qa",
-        "previous_status": "in_progress",
-        "new_status": "review",
-        "message": "QA prepared verification report.",
-        "prompt_source": "agents/qa.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      },
-      {
-        "timestamp": "2026-05-02T13:19:01Z",
-        "agent": "orchestrator",
-        "previous_status": "review",
-        "new_status": "ready_for_dev",
-        "message": "QA verification requires rework; task returned to ready_for_dev.",
-        "prompt_source": "orchestrator",
-        "llm_provider": "orchestrator"
-      }
-    ],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-5",
-    "type": "feature",
-    "title": "Add sample generated file",
-    "description": "Create a safe sample artifact file through patch proposal.",
-    "status": "idea",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-6",
-    "type": "feature",
-    "title": "Check command execution layer",
-    "description": "Validate that safe commands can be executed and stored.",
-    "status": "idea",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-7",
-    "type": "feature",
-    "title": "Check command execution layer",
-    "description": "Validate that safe commands can be executed and stored.",
-    "status": "idea",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-8",
-    "type": "feature",
-    "title": "Inspect repo context usage",
-    "description": "Attach repository context and improve developer planning.",
-    "status": "idea",
-    "priority": "medium",
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-9",
-    "type": "feature",
-    "title": "Base task",
-    "description": "This task should be completed first.",
+    "title": "Conversation context test",
+    "description": "Test active focus.",
     "status": "idea",
     "priority": "medium",
     "depends_on": [],
@@ -1234,573 +885,7 @@
       }
     },
     "history": [],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-10",
-    "type": "feature",
-    "title": "Dependent task",
-    "description": "This task depends on base task.",
-    "status": "idea",
-    "priority": "medium",
-    "depends_on": [
-      "TASK-9"
-    ],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T15:09:33Z",
-        "agent": "orchestrator",
-        "previous_status": "idea",
-        "new_status": "idea",
-        "message": "Added dependency: TASK-10 depends on TASK-9.",
-        "prompt_source": null,
-        "llm_provider": null
-      }
-    ],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-11",
-    "type": "feature",
-    "title": "Introduce decision layer",
-    "description": "Test linking decisions to tasks.",
-    "status": "idea",
-    "priority": "medium",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-12",
-    "type": "feature",
-    "title": "Release test task",
-    "description": "Task for release layer validation.",
-    "status": "idea",
-    "priority": "medium",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-13",
-    "type": "feature",
-    "title": "Add healthcheck command",
-    "description": "Create a CLI command that prints system health status.",
-    "status": "idea",
-    "priority": "medium",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "BUG-2",
-    "type": "bug",
-    "title": "Login returns 500",
-    "description": "Login fails with HTTP 500.",
-    "status": "idea",
-    "priority": "medium",
-    "severity": "unknown",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "raw_input": "NullPointerException",
-    "artifacts": {
-      "bug_report": {
-        "summary": "Structured bug summary from raw input.",
-        "environment": "unknown",
-        "steps_to_reproduce": [
-          "Open affected functionality",
-          "Perform the reported action",
-          "Observe the actual result"
-        ],
-        "actual_result": "Reported behavior occurs.",
-        "expected_result": "System should behave according to requirements.",
-        "logs": [],
-        "attachments": [],
-        "suspected_area": "unknown",
-        "impact": "Needs investigation."
-      },
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T15:50:23Z",
-        "agent": "bug_intake",
-        "previous_status": null,
-        "new_status": "idea",
-        "message": "Bug Intake created a structured bug report.",
-        "prompt_source": "agents/bug_intake.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      }
-    ],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "TASK-14",
-    "type": "feature",
-    "title": "Add healthcheck command",
-    "description": "Create a CLI command that prints system health status.",
-    "status": "idea",
-    "priority": "medium",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "artifacts": {
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [],
-    "related_decisions": [],
-    "release_id": null
-  },
-  {
-    "id": "BUG-3",
-    "type": "bug",
-    "title": "Login returns 500",
-    "description": "Login fails with HTTP 500.",
-    "status": "idea",
-    "priority": "medium",
-    "severity": "unknown",
-    "depends_on": [],
-    "blocked_by": [],
-    "blocked_reason": "",
-    "tags": [],
-    "estimate": null,
-    "raw_input": "NullPointerException",
-    "artifacts": {
-      "bug_report": {
-        "summary": "Structured bug summary from raw input.",
-        "environment": "unknown",
-        "steps_to_reproduce": [
-          "Open affected functionality",
-          "Perform the reported action",
-          "Observe the actual result"
-        ],
-        "actual_result": "Reported behavior occurs.",
-        "expected_result": "System should behave according to requirements.",
-        "logs": [],
-        "attachments": [],
-        "suspected_area": "unknown",
-        "impact": "Needs investigation."
-      },
-      "analysis": null,
-      "acceptance_criteria": [],
-      "architecture": null,
-      "technical_risks": [],
-      "implementation_guidance": null,
-      "implementation": null,
-      "implementation_plan": {
-        "summary": "",
-        "files_to_create": [],
-        "files_to_modify": [],
-        "proposed_changes": [],
-        "commands_to_run": [],
-        "tests_to_add": [],
-        "risks": [],
-        "rollback_notes": ""
-      },
-      "patch_proposal": {
-        "summary": "",
-        "files": [],
-        "unified_diff": "",
-        "requires_approval": true,
-        "approved": false,
-        "applied": false,
-        "applied_at": null
-      },
-      "changed_files": [],
-      "developer_notes": null,
-      "test_cases": [],
-      "edge_cases": [],
-      "bugs": [],
-      "qa_verification": {
-        "verdict": "unknown",
-        "summary": "",
-        "checked_items": [],
-        "failed_checks": [],
-        "bugs_found": [],
-        "recommended_next_status": "review"
-      },
-      "command_results": [],
-      "repository_context": {
-        "attached": false,
-        "scanned_at": null,
-        "repo_root": ".",
-        "summary": {
-          "total_files_indexed": 0,
-          "interesting_directories": [],
-          "ignored_paths": []
-        },
-        "relevant_files": [],
-        "search_hits": []
-      }
-    },
-    "history": [
-      {
-        "timestamp": "2026-05-02T15:50:38Z",
-        "agent": "bug_intake",
-        "previous_status": null,
-        "new_status": "idea",
-        "message": "Bug Intake created a structured bug report.",
-        "prompt_source": "agents/bug_intake.md",
-        "llm_provider": "fake",
-        "context_files_used": [
-          "project.md",
-          "tech_stack.md",
-          "architecture.md",
-          "coding_rules.md",
-          "testing_rules.md",
-          "commands.md",
-          "restrictions.md"
-        ]
-      }
-    ],
+    "notes": [],
     "related_decisions": [],
     "release_id": null
   }

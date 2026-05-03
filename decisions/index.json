@@ -1,10 +1,13 @@
 [
   {
     "id": "ADR-001",
-    "title": "Use JSON storage",
+    "title": "Использовать JSON-хранилище на MVP",
     "status": "accepted",
     "date": "2026-05-02",
-    "tags": [],
+    "tags": [
+      "mvp",
+      "storage"
+    ],
     "related_tasks": [
       "TASK-1"
     ],

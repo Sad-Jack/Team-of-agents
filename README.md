@@ -33,7 +33,48 @@
 - `agents/` — промпты ролей
 - `tasks/`, `releases/`, `decisions/`, `artifacts/` — данные и артефакты
 
-## Быстрый старт
+## Быстрый запуск
+
+### 1. Первичная настройка
+
+```bash
+./setup.sh
+```
+
+Создаёт `.venv`, устанавливает зависимости, копирует `.env.example` → `.env`.
+
+### 2. Заполнить `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=<токен от @BotFather>
+TELEGRAM_OWNER_ID=<твой Telegram user id>
+```
+
+### 3. Проверить
+
+```bash
+python3 run.py telegram-config
+python3 run.py doctor
+```
+
+`.env` подхватывается автоматически — вручную делать `source .env` не нужно.
+
+### 4. Запустить Telegram-бота
+
+```bash
+./start.sh
+```
+
+Или через make:
+
+```bash
+make setup
+make start
+```
+
+---
+
+## Быстрый старт (CLI без Telegram)
 
 ```bash
 python3 -m unittest discover -s tests
@@ -144,6 +185,48 @@ python3 run.py telegram
 - по умолчанию dry-run (настраивается флагом `TELEGRAM_DRY_RUN_BY_DEFAULT`)
 - рискованные действия требуют `/yes ...`
 - токен не печатается в конфиге и логах
+
+## Telegram UX Layer
+
+### Подтверждение действий кнопками
+
+При dry-run (по умолчанию) бот показывает план и inline-кнопки:
+
+```
+Plan: create_task ...
+[✅ Выполнить]  [❌ Отмена]
+```
+
+- **✅ Выполнить** — выполняет safe-действие немедленно
+- **❌ Отмена** — отменяет pending action
+- Рискованные действия (`RISKY_ACTIONS`) через кнопку не выполняются — требуют `/yes <запрос>`
+
+### Status chat для событий агентов
+
+Добавь в `.env`:
+```env
+TELEGRAM_STATUS_CHAT_ID=<id чата/канала для уведомлений>
+TELEGRAM_NOTIFY_AGENT_EVENTS=true
+```
+
+Бот отправляет в status chat уведомления о задачах:
+- `🆕 Создана задача: TASK-X`
+- `🐞 Создан баг: TASK-X`
+- `✅ Работа по TASK-X завершена`
+- `❌ Ошибка при выполнении действия`
+
+Как получить TELEGRAM_STATUS_CHAT_ID: добавь бота в нужный чат/канал и отправь сообщение, затем используй `@userinfobot` или Telegram API `/getUpdates`.
+
+### /start как entrypoint Project Manager-а
+
+`/start` показывает режим работы:
+- **self-managed** — `MANAGED_REPO_PATH=.` (бот управляет самим Team-of-agents)
+- **embedded** — `MANAGED_REPO_PATH=..` (бот управляет внешним проектом)
+
+Кнопка **🔍 Изучить проект** запускает безопасный repo scan:
+- подтверждает managed repo root
+- считает файлы в проекте
+- показывает предупреждения и подсказывает следующие шаги
 
 ## Голосовые сообщения в Telegram
 

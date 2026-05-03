@@ -1,16 +1,24 @@
 import shlex
-import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 
+from managed_project import get_system_root, resolve_managed_repo_path
+
 ALLOWED_COMMANDS = {
     "python -m unittest discover -s tests",
+    "python3 -m unittest discover -s tests",
     "python run.py validate",
+    "python3 run.py validate",
     "python run.py agents",
+    "python3 run.py agents",
     "python run.py config",
+    "python3 run.py config",
     "python run.py context",
+    "python3 run.py context",
     "python run.py list",
+    "python3 run.py list",
 }
 
 FORBIDDEN_TOKENS = ["&&", "||", ";", "|", ">", "<", "`", "$("]
@@ -38,7 +46,26 @@ def _trim(text: str) -> str:
     return text[:MAX_OUTPUT] + "\n...[truncated]"
 
 
-def run_safe_command(command: str, cwd: str = ".", timeout_seconds: int = 30) -> dict:
+def normalize_python_command(command: str) -> list[str]:
+    if not isinstance(command, str):
+        raise ValueError("Command must be a string.")
+    args = shlex.split(command.strip())
+    if not args:
+        raise ValueError("Command is empty.")
+    if args[0] in {"python", "python3"}:
+        args[0] = sys.executable
+    return args
+
+
+def get_command_working_directory(command: str) -> str:
+    text = command.strip()
+    lowered = text.lower()
+    if lowered.startswith("python run.py ") or lowered.startswith("python3 run.py "):
+        return get_system_root()
+    return resolve_managed_repo_path()
+
+
+def run_safe_command(command: str, cwd: str | None = None, timeout_seconds: int = 30) -> dict:
     cmd = command.strip() if isinstance(command, str) else ""
     if not cmd:
         raise ValueError("Command is empty.")
@@ -46,17 +73,16 @@ def run_safe_command(command: str, cwd: str = ".", timeout_seconds: int = 30) ->
         raise ValueError("timeout_seconds must be <= 120.")
     if not is_command_allowed(cmd):
         raise ValueError(f"Command is not allowed: {cmd}")
+    working_dir = cwd or get_command_working_directory(cmd)
 
     started_at = _utc_now()
     start = time.monotonic()
 
     try:
-        args = shlex.split(cmd)
-        if args and args[0] == "python" and shutil.which("python") is None and shutil.which("python3"):
-            args[0] = "python3"
+        args = normalize_python_command(cmd)
         completed = subprocess.run(
             args,
-            cwd=cwd,
+            cwd=working_dir,
             capture_output=True,
             text=True,
             shell=False,
@@ -79,7 +105,7 @@ def run_safe_command(command: str, cwd: str = ".", timeout_seconds: int = 30) ->
             "finished_at": finished_at,
             "duration_seconds": round(end - start, 3),
             "source": "manual",
-            "working_directory": cwd,
+            "working_directory": working_dir,
         }
     except subprocess.TimeoutExpired:
         end = time.monotonic()
@@ -94,5 +120,5 @@ def run_safe_command(command: str, cwd: str = ".", timeout_seconds: int = 30) ->
             "finished_at": finished_at,
             "duration_seconds": round(end - start, 3),
             "source": "manual",
-            "working_directory": cwd,
+            "working_directory": working_dir,
         }

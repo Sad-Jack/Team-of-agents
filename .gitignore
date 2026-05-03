@@ -24,3 +24,24 @@ venv/
 # Build
 build/
 dist/
+
+# Temporary voice files
+.tmp/
+*.wav
+*.ogg
+*.opus
+
+# Local runtime / secrets
+.env
+.venv/
+.claude/
+.tmp/
+.idea/
+
+# Local storage
+data/
+sessions/
+
+# Python cache
+__pycache__/
+*.pyc

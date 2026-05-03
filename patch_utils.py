@@ -1,6 +1,8 @@
 import os
 from datetime import datetime, timezone
 
+from managed_project import resolve_managed_repo_path
+
 
 def get_patch_proposal(task: dict) -> dict:
     return task.get("artifacts", {}).get("patch_proposal", {})
@@ -67,7 +69,7 @@ def _is_unsafe_path(path: str) -> bool:
     return False
 
 
-def apply_patch_proposal(task: dict, repo_root: str = ".", force: bool = False) -> dict:
+def apply_patch_proposal(task: dict, repo_root: str | None = None, force: bool = False) -> dict:
     proposal = get_patch_proposal(task)
     result = {"applied_files": [], "skipped_files": [], "errors": []}
 
@@ -79,7 +81,7 @@ def apply_patch_proposal(task: dict, repo_root: str = ".", force: bool = False) 
         result["errors"].append("Patch proposal is already applied.")
         return result
 
-    root = os.path.abspath(repo_root)
+    root = os.path.abspath(resolve_managed_repo_path() if repo_root is None else repo_root)
     files = proposal.get("files", [])
 
     for item in files:

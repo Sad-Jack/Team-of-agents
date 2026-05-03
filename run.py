@@ -1980,6 +1980,8 @@ def build_parser():
 
 
 def main():
+    from env_loader import load_dotenv_if_exists
+    load_dotenv_if_exists()
     parser = build_parser()
     args = parser.parse_args()
 

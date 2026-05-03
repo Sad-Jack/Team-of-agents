@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 from datetime import date
 from pathlib import Path
 from typing import Optional
+
+import storage
 
 ALLOWED_DECISION_STATUSES = {"proposed", "accepted", "superseded", "rejected"}
 DECISIONS_DIR = Path("decisions")
@@ -12,24 +13,25 @@ DECISION_INDEX_PATH = DECISIONS_DIR / "index.json"
 
 def _ensure_decisions_storage() -> None:
     DECISIONS_DIR.mkdir(parents=True, exist_ok=True)
-    if not DECISION_INDEX_PATH.exists():
-        DECISION_INDEX_PATH.write_text("[]", encoding="utf-8")
+    storage.JSON_COLLECTION_PATHS["decisions_index"] = DECISION_INDEX_PATH
+    storage.init_storage()
 
 
 def load_decision_index() -> list[dict]:
     _ensure_decisions_storage()
     try:
-        data = json.loads(DECISION_INDEX_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {DECISION_INDEX_PATH.as_posix()}: {exc}") from exc
-    if not isinstance(data, list):
-        raise ValueError(f"{DECISION_INDEX_PATH.as_posix()} must contain a JSON array.")
+        data = storage.load_collection("decisions_index")
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
     return data
 
 
 def save_decision_index(index: list[dict]) -> None:
     _ensure_decisions_storage()
-    DECISION_INDEX_PATH.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        storage.save_collection("decisions_index", index)
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def list_decisions() -> list[dict]:

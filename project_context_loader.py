@@ -8,6 +8,7 @@ PROJECT_CONTEXT_FILES = [
     "coding_rules.md",
     "testing_rules.md",
     "commands.md",
+    "managed_project.md",
     "restrictions.md",
 ]
 

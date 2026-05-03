@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -6,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import backlog
 from agent_runner import AGENT_FILES, AGENTS_DIR, run_agent
 from llm_client import BaseLLMClient, get_llm_client
+import storage
 
 TASKS_PATH = Path("tasks") / "tasks.json"
 
@@ -434,6 +434,18 @@ def validate_task(task: dict) -> None:
 
     if not isinstance(task["history"], list):
         raise ValueError(f"Task {task['id']} history must be a list.")
+    if "notes" not in task:
+        raise ValueError(f"Task {task['id']} is missing required field: notes")
+    if not isinstance(task["notes"], list):
+        raise ValueError(f"Task {task['id']} notes must be a list.")
+    for idx, note in enumerate(task["notes"]):
+        if not isinstance(note, dict):
+            raise ValueError(f"Task {task['id']} notes[{idx}] must be an object.")
+        for key in ("timestamp", "author", "text"):
+            if key not in note:
+                raise ValueError(f"Task {task['id']} notes[{idx}] missing field: {key}")
+            if not isinstance(note[key], str):
+                raise ValueError(f"Task {task['id']} notes[{idx}].{key} must be a string.")
     for list_field in ("depends_on", "blocked_by", "tags"):
         if list_field not in task:
             raise ValueError(f"Task {task['id']} is missing required field: {list_field}")
@@ -594,20 +606,16 @@ def _normalize_task_schema(task: dict) -> dict:
         artifacts["bug_report"] = _normalize_bug_report(artifacts.get("bug_report"))
 
     task.setdefault("history", [])
+    task.setdefault("notes", [])
     return task
 
 
 def load_tasks() -> List[dict]:
-    if not TASKS_PATH.exists():
-        return []
-
+    storage.JSON_COLLECTION_PATHS["tasks"] = TASKS_PATH
     try:
-        data = json.loads(TASKS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {TASKS_PATH.as_posix()}: {exc}") from exc
-
-    if not isinstance(data, list):
-        raise ValueError(f"{TASKS_PATH.as_posix()} must contain a JSON array of tasks.")
+        data = storage.load_collection("tasks")
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
 
     normalized = [_normalize_task_schema(task) for task in data]
     for task in normalized:
@@ -620,9 +628,11 @@ def save_tasks(tasks: List[dict]) -> None:
     normalized = [_normalize_task_schema(task) for task in tasks]
     for task in normalized:
         validate_task(task)
-
-    TASKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TASKS_PATH.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    storage.JSON_COLLECTION_PATHS["tasks"] = TASKS_PATH
+    try:
+        storage.save_collection("tasks", normalized)
+    except storage.StorageError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _next_id_with_prefix(tasks: List[dict], prefix: str) -> str:
@@ -794,6 +804,7 @@ def create_task(title: str, description: str) -> dict:
             "estimate": None,
             "artifacts": {},
             "history": [],
+            "notes": [],
         }
     )
 
@@ -829,11 +840,12 @@ def create_bug(
             "tags": [],
             "estimate": None,
             "raw_input": raw_input or "",
-            "artifacts": {
+        "artifacts": {
                 "bug_report": _normalize_bug_report(),
-            },
-            "history": [],
-        }
+        },
+        "history": [],
+        "notes": [],
+    }
     )
 
     agent_result = run_agent("bug_intake", new_bug, llm_client=client)
