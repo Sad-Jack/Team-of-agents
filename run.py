@@ -941,6 +941,8 @@ def cmd_board_post_task(args):
                 f"Moved {task_id} card: {prev} → {topic_key} (message_id={result['message_id']})"
                 f"\nWarning: could not archive old card — {result.get('reason', '')}"
             )
+        elif status == "unchanged":
+            print(f"No changes for {task_id} card in {topic_key} (message_id={result['message_id']})")
         elif status == "timeout":
             print(f"Warning: Telegram timeout for {task_id} — {result.get('reason', '')}")
             raise SystemExit(1)

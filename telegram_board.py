@@ -725,6 +725,15 @@ def get_send_timeout() -> float:
     return 20.0
 
 
+def _is_message_not_modified_exception(exc: BaseException) -> bool:
+    """Return True when exc is Telegram's 'Message is not modified' error."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in (
+        "message is not modified",
+        "specified new message content and reply markup are exactly the same",
+    ))
+
+
 def _is_timeout_exception(exc: BaseException) -> bool:
     """Return True when exc looks like a network / Telegram API timeout."""
     type_name = type(exc).__name__.lower()
@@ -999,6 +1008,13 @@ async def upsert_task_board_card(
             if _is_timeout_exception(edit_exc):
                 logging.warning("telegram_board: edit timeout for task %r: %s", task_id, short)
                 return _result("timeout", reason=short)
+            if _is_message_not_modified_exception(edit_exc):
+                logging.info("telegram_board: card already up to date for task %r", task_id)
+                return _result(
+                    "unchanged",
+                    message_id=existing_message_id,
+                    reason="card is already up to date",
+                )
             # Message deleted / inaccessible — fall through to recreate
             low = short.lower()
             if any(kw in low for kw in (
