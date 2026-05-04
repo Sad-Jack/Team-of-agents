@@ -382,6 +382,26 @@ TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE=true   # по умолчанию: архив�
 
 Если редактирование старой карточки не удалось — новая карточка уже создана и mapping обновлён; операция считается успешной со статусом `moved_archive_failed`.
 
+### Авто-синхронизация Board
+
+После любых изменений задачи через CLI или бот карточка автоматически обновляется на Board:
+
+- `create`, `create-bug` — создаёт новую карточку
+- `run-next`, `advance-task`, `prepare-task` — обновляет существующую карточку
+- `run-all` — обновляет все затронутые карточки
+
+Авто-синхронизация включена по умолчанию при `TELEGRAM_BOARD_ENABLED=true`. Чтобы отключить:
+
+```env
+TELEGRAM_BOARD_AUTO_SYNC=false
+```
+
+Вручную обновить карточку одной задачи:
+
+```bash
+python3 run.py board-post-task TASK-1
+```
+
 ### Важные правила Board
 
 - Board — только для отображения. Все рабочие команды — через приватный чат.
@@ -485,6 +505,32 @@ python3 run.py e2e-demo
 - `python3 run.py patch --id TASK-1`
 - `python3 run.py approve-patch --id TASK-1`
 - `python3 run.py apply-patch --id TASK-1 --force`
+
+### Локальные проверки
+
+| Команда | Что делает |
+|---|---|
+| `make check-fast` | compile + focused tests + validate |
+| `make check` | то же + full tests + doctor |
+| `--verbose` | дополнительно стримить полный вывод в консоль |
+
+```bash
+./scripts/check.sh --fast           # быстро, тихо
+./scripts/check.sh                  # полный прогон, тихо
+./scripts/check.sh --fast --verbose # быстро + полный вывод
+./scripts/check.sh --verbose        # полный прогон + полный вывод
+```
+
+По умолчанию в консоль выводятся только секции и итог (`✓ / ❌`).
+Полный вывод каждой команды (включая WARNING/ERROR из тестов) пишется в:
+
+```
+.tmp/check/check-YYYYMMDD-HHMMSS.log
+```
+
+При ошибке автоматически показываются последние 80 строк лога.
+
+Скрипт использует `.venv/bin/python` если есть, иначе `python3`. Останавливается на первой ошибке.
 
 ### Commands / Tests
 - `python3 run.py commands`
