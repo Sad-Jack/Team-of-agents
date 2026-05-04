@@ -428,6 +428,46 @@ WHISPER_LANGUAGE=ru
 VOICE_KEEP_FILES=false
 ```
 
+### Voice input через mlx-whisper (Apple Silicon, бесплатно, без API)
+
+Если `whisper` CLI недоступен, но есть Apple Silicon — используй `mlx-whisper` через `custom_cli`:
+
+**Установка:**
+
+```bash
+pip install mlx-whisper
+python -c "import mlx_whisper; print('mlx_whisper ok')"
+```
+
+**Настройка `.env`:**
+
+```env
+STT_PROVIDER=custom_cli
+STT_CUSTOM_COMMAND=python scripts/stt_mlx_whisper.py --audio-path {audio_path} --model mlx-community/whisper-small-mlx --language ru
+```
+
+> `{audio_path}` — плейсхолдер, подставляется автоматически. Менять не нужно.
+
+**Проверка:**
+
+```bash
+python3 run.py voice-config
+```
+
+**Запуск бота:**
+
+```bash
+python3 run.py telegram
+```
+
+**Важно:**
+- Первый запуск скачивает модель в кеш (~150 MB для `whisper-small`). Последующие — мгновенны.
+- Если venv проекта использует Python 3.14+ и `mlx-whisper` требует 3.11/3.12 — создай отдельный venv и укажи путь к его `python`:
+  ```env
+  STT_CUSTOM_COMMAND=/path/to/stt-venv/bin/python scripts/stt_mlx_whisper.py --audio-path {audio_path} --model mlx-community/whisper-small-mlx --language ru
+  ```
+- `.env` не коммитить (добавлен в `.gitignore`)
+
 Проверка:
 
 ```bash

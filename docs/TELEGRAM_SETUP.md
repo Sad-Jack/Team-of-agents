@@ -112,6 +112,74 @@ WHISPER_LANGUAGE=ru
 
 ---
 
+## Voice input через mlx-whisper (Apple Silicon, без API)
+
+mlx-whisper — бесплатный локальный STT на Apple Silicon. Не требует OpenAI API.
+
+### Установка
+
+```bash
+pip install mlx-whisper
+python -c "import mlx_whisper; print('mlx_whisper ok')"
+```
+
+### Настройка `.env`
+
+```env
+STT_PROVIDER=custom_cli
+STT_CUSTOM_COMMAND=python scripts/stt_mlx_whisper.py --audio-path {audio_path} --model mlx-community/whisper-small-mlx --language ru
+```
+
+> `{audio_path}` — обязательный плейсхолдер. Подставляется автоматически пайплайном. Не трогай.
+
+### Проверка конфигурации
+
+```bash
+python3 run.py voice-config
+```
+
+Ожидаемый вывод:
+```
+STT_PROVIDER=custom_cli
+STT_CUSTOM_COMMAND_SET=true
+FFMPEG_FOUND=true
+...
+```
+
+### Запуск
+
+```bash
+python3 run.py telegram
+```
+
+Отправь голосовое сообщение боту — оно пройдёт путь:
+`Telegram voice → ffmpeg → WAV → scripts/stt_mlx_whisper.py → text → Supervisor`
+
+### Важные замечания
+
+| Тема | Подробности |
+|---|---|
+| Первый запуск | Модель скачивается в кеш (~150 MB для `whisper-small`). Последующие запуски мгновенны. |
+| Python-версия | mlx-whisper требует Python 3.11/3.12. Если venv проекта использует 3.14+, создай отдельный venv и укажи путь к его `python` в `STT_CUSTOM_COMMAND`. |
+| `.env` | **Не коммитить.** Уже добавлен в `.gitignore`. Коммитить можно только `.env.example`. |
+| Безопасность | Рискованные действия (run_command, apply_patch) по распознанному тексту всё равно требуют `/yes <запрос>`. |
+
+### Отдельный venv для mlx-whisper (Python 3.11/3.12)
+
+```bash
+python3.12 -m venv .venv-stt
+.venv-stt/bin/pip install mlx-whisper
+```
+
+В `.env`:
+
+```env
+STT_PROVIDER=custom_cli
+STT_CUSTOM_COMMAND=.venv-stt/bin/python scripts/stt_mlx_whisper.py --audio-path {audio_path} --model mlx-community/whisper-small-mlx --language ru
+```
+
+---
+
 ## Подтверждение действий кнопками
 
 При `TELEGRAM_DRY_RUN_BY_DEFAULT=true` (по умолчанию) каждый plain-text запрос показывает план + inline-кнопки:
