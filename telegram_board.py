@@ -564,6 +564,22 @@ def is_board_enabled() -> bool:
     return _parse_bool(os.getenv("TELEGRAM_BOARD_ENABLED"), default=False)
 
 
+def is_board_auto_sync_enabled() -> bool:
+    """Return True when automatic Board sync after task mutations is active.
+
+    Controlled by ``TELEGRAM_BOARD_AUTO_SYNC``.
+
+    Rules:
+    - ``true`` / ``1`` / ``yes`` / ``on``  → True
+    - ``false`` / ``0`` / ``no`` / ``off`` → False
+    - empty or missing                     → True **iff** ``TELEGRAM_BOARD_ENABLED`` is True
+    """
+    raw = (os.getenv("TELEGRAM_BOARD_AUTO_SYNC") or "").strip()
+    if not raw:
+        return is_board_enabled()
+    return raw.lower() in {"1", "true", "yes", "y", "on"}
+
+
 def is_archive_on_move_enabled() -> bool:
     """Return True when old card should be replaced with a tombstone on topic move.
 
@@ -1072,6 +1088,180 @@ async def upsert_task_board_card(
         )
 
     return _result(action, message_id=new_message_id)
+
+
+async def sync_task_to_board(
+    task_id: str,
+    *,
+    bot: object = None,
+    source: str = "system",
+) -> dict:
+    """Sync a single task card to the Telegram Board.  Safe: never raises.
+
+    Returns a result dict with at least ``{"status": ..., "task_id": ...}``.
+
+    When *bot* is ``None`` a new ``Bot`` is created from ``TELEGRAM_BOT_TOKEN``.
+    Callers that already have a live bot instance (e.g. telegram_bot.py handlers)
+    should pass it via *bot* to avoid creating an extra connection.
+
+    Skips silently (status="skipped") when:
+    - Board is disabled (``TELEGRAM_BOARD_ENABLED`` is falsy)
+    - Auto-sync is disabled (``TELEGRAM_BOARD_AUTO_SYNC=false``)
+    - No token available and no bot provided
+    - Task not found in the task store
+    """
+    if not is_board_enabled():
+        return {"status": "skipped", "task_id": task_id, "reason": "board disabled"}
+
+    if not is_board_auto_sync_enabled():
+        return {"status": "skipped", "task_id": task_id, "reason": "board auto-sync disabled"}
+
+    if bot is None:
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+        if not token:
+            return {"status": "skipped", "task_id": task_id, "reason": "no bot token"}
+        try:
+            from telegram import Bot as _Bot
+            bot = _Bot(token=token)
+        except ImportError:
+            return {
+                "status": "skipped",
+                "task_id": task_id,
+                "reason": "python-telegram-bot not installed",
+            }
+
+    import orchestrator as _orch
+    task = _orch.get_task(task_id)
+    if task is None:
+        return {"status": "skipped", "task_id": task_id, "reason": "task not found"}
+
+    try:
+        result = await upsert_task_board_card(bot, task)
+        logging.info(
+            "telegram_board: sync_task_to_board %s (source=%s) → %s",
+            task_id,
+            source,
+            result.get("status"),
+        )
+        return result
+    except Exception as exc:
+        short = str(exc)[:200]
+        logging.warning(
+            "telegram_board: sync_task_to_board failed for %s: %s", task_id, short
+        )
+        return {"status": "error", "task_id": task_id, "reason": short}
+
+
+async def sync_all_tasks_to_board(*, bot: Any = None, source: str = "system") -> dict:
+    """Sync all tasks to the Telegram Board.
+
+    Returns a summary dict with counts per status:
+      {status, total, created, updated, unchanged, recreated, moved, skipped, timeout, error, items}
+
+    Never raises — failures per task are recorded in items[].
+    Returns immediately with status="skipped" when board or auto-sync is disabled.
+    """
+    if not is_board_enabled():
+        return {"status": "skipped", "reason": "board disabled", "total": 0, "items": []}
+    if not is_board_auto_sync_enabled():
+        return {"status": "skipped", "reason": "auto-sync disabled", "total": 0, "items": []}
+
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return {"status": "skipped", "reason": "TELEGRAM_BOT_TOKEN not set", "total": 0, "items": []}
+
+    import orchestrator as _orch
+
+    tasks = _orch.list_tasks()
+    total = len(tasks)
+
+    if bot is None:
+        try:
+            from telegram import Bot
+            bot = Bot(token=token)
+        except ImportError:
+            return {
+                "status": "error",
+                "reason": "python-telegram-bot not installed",
+                "total": total,
+                "items": [],
+            }
+
+    counts: dict[str, int] = {
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "recreated": 0,
+        "moved": 0,
+        "skipped": 0,
+        "timeout": 0,
+        "error": 0,
+    }
+    items: list[dict] = []
+
+    for task in tasks:
+        task_id = task.get("id", "?")
+        result = await sync_task_to_board(task_id, bot=bot, source=source)
+        item_status = result.get("status", "error")
+        # Map all "ok"-class statuses that upsert returns
+        if item_status == "ok":
+            item_status = "created"
+        counts[item_status] = counts.get(item_status, 0) + 1
+        items.append({"task_id": task_id, "status": item_status, "reason": result.get("reason")})
+
+    overall_status = "error" if counts["error"] > 0 else "ok"
+    return {
+        "status": overall_status,
+        "total": total,
+        **counts,
+        "items": items,
+    }
+
+
+def format_board_sync_summary(result: dict) -> str:
+    """Format sync_all_tasks_to_board result as human-readable text."""
+    status = result.get("status", "?")
+    if status == "skipped":
+        return f"Board sync пропущен: {result.get('reason', '?')}"
+
+    total = result.get("total", 0)
+    created = result.get("created", 0)
+    updated = result.get("updated", 0)
+    unchanged = result.get("unchanged", 0)
+    recreated = result.get("recreated", 0)
+    moved = result.get("moved", 0)
+    skipped = result.get("skipped", 0)
+    timeout = result.get("timeout", 0)
+    error = result.get("error", 0)
+
+    lines = [f"{'✅' if status == 'ok' else '⚠️'} Board sync завершён"]
+    lines.append(f"Задач: {total}")
+    if created:
+        lines.append(f"🆕 Создано: {created}")
+    if updated:
+        lines.append(f"✏️ Обновлено: {updated}")
+    if recreated:
+        lines.append(f"🔄 Пересоздано: {recreated}")
+    if moved:
+        lines.append(f"📦 Перемещено: {moved}")
+    if unchanged:
+        lines.append(f"— Без изменений: {unchanged}")
+    if skipped:
+        lines.append(f"⏭ Пропущено: {skipped}")
+    if timeout:
+        lines.append(f"⏱ Таймаут: {timeout}")
+    if error:
+        lines.append(f"❌ Ошибок: {error}")
+        error_items = [
+            item for item in result.get("items", []) if item.get("status") == "error"
+        ]
+        for item in error_items[:5]:
+            reason = item.get("reason") or "unknown error"
+            lines.append(f"  • {item['task_id']}: {reason[:80]}")
+        if len(error_items) > 5:
+            lines.append(f"  … и ещё {len(error_items) - 5}")
+
+    return "\n".join(lines)
 
 
 def format_ping_results(results: list[dict]) -> str:

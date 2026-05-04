@@ -2884,12 +2884,8 @@ class TestBoardPostTaskCLIUnchanged(unittest.TestCase):
 
     def test_unchanged_message_in_run_py(self):
         """run.py _run_upsert prints 'No changes' message for status='unchanged'."""
-        import run as run_module
-        import asyncio
-        # We test the print branch directly without subprocess
-        # by calling the relevant code path via a mock
         import unittest.mock as mock
-        import io, sys
+        import io
 
         mock_result = {
             "status": "unchanged",
@@ -2902,7 +2898,6 @@ class TestBoardPostTaskCLIUnchanged(unittest.TestCase):
 
         captured = io.StringIO()
         with mock.patch("sys.stdout", captured):
-            # Simulate the run.py _run_upsert status handling inline
             status = mock_result["status"]
             task_id = mock_result["task_id"]
             topic_key = mock_result["topic_key"]
@@ -2915,6 +2910,626 @@ class TestBoardPostTaskCLIUnchanged(unittest.TestCase):
         self.assertIn("No changes for TASK-1", out)
         self.assertIn("task_ideas", out)
         self.assertIn("message_id=65", out)
+
+
+class TestIsBoardAutoSyncEnabled(unittest.TestCase):
+    """Unit tests for is_board_auto_sync_enabled()."""
+
+    def _call(self, auto_sync_val, board_enabled_val="true"):
+        env = {"TELEGRAM_BOARD_ENABLED": board_enabled_val}
+        if auto_sync_val is not None:
+            env["TELEGRAM_BOARD_AUTO_SYNC"] = auto_sync_val
+        else:
+            env.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+        with unittest.mock.patch.dict("os.environ", env, clear=False):
+            # Remove TELEGRAM_BOARD_AUTO_SYNC from env if we want "missing"
+            if auto_sync_val is None:
+                with unittest.mock.patch.dict("os.environ", {}, clear=False):
+                    import os as _os
+                    saved = _os.environ.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+                    try:
+                        return telegram_board.is_board_auto_sync_enabled()
+                    finally:
+                        if saved is not None:
+                            _os.environ["TELEGRAM_BOARD_AUTO_SYNC"] = saved
+            return telegram_board.is_board_auto_sync_enabled()
+
+    # --- explicit false values ---
+    def test_false_literal(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "false"
+        }):
+            self.assertFalse(telegram_board.is_board_auto_sync_enabled())
+
+    def test_zero(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "0"
+        }):
+            self.assertFalse(telegram_board.is_board_auto_sync_enabled())
+
+    def test_no(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "no"
+        }):
+            self.assertFalse(telegram_board.is_board_auto_sync_enabled())
+
+    def test_off(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "off"
+        }):
+            self.assertFalse(telegram_board.is_board_auto_sync_enabled())
+
+    # --- explicit true values ---
+    def test_true_literal(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "false", "TELEGRAM_BOARD_AUTO_SYNC": "true"
+        }):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+    def test_one(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "false", "TELEGRAM_BOARD_AUTO_SYNC": "1"
+        }):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+    def test_yes(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "false", "TELEGRAM_BOARD_AUTO_SYNC": "yes"
+        }):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+    def test_on(self):
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "false", "TELEGRAM_BOARD_AUTO_SYNC": "on"
+        }):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+    # --- missing / empty → inherits from TELEGRAM_BOARD_ENABLED ---
+    def test_missing_board_enabled_true(self):
+        """Missing AUTO_SYNC + board enabled → True."""
+        import os as _os
+        env = {"TELEGRAM_BOARD_ENABLED": "true"}
+        patched = {k: v for k, v in _os.environ.items()}
+        patched.update(env)
+        patched.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+        with unittest.mock.patch.dict("os.environ", patched, clear=True):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+    def test_missing_board_enabled_false(self):
+        """Missing AUTO_SYNC + board disabled → False."""
+        import os as _os
+        env = {"TELEGRAM_BOARD_ENABLED": "false"}
+        patched = {k: v for k, v in _os.environ.items()}
+        patched.update(env)
+        patched.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+        with unittest.mock.patch.dict("os.environ", patched, clear=True):
+            self.assertFalse(telegram_board.is_board_auto_sync_enabled())
+
+    def test_empty_string_inherits_board_enabled(self):
+        """Empty TELEGRAM_BOARD_AUTO_SYNC is treated same as missing."""
+        with unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": ""
+        }):
+            self.assertTrue(telegram_board.is_board_auto_sync_enabled())
+
+
+class TestSyncTaskToBoard(unittest.IsolatedAsyncioTestCase):
+    """Tests for telegram_board.sync_task_to_board."""
+
+    def setUp(self):
+        import tempfile, pathlib
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        self._orig_path = telegram_message_links._LINKS_PATH
+        telegram_message_links._LINKS_PATH = pathlib.Path(self._tmp.name)
+        telegram_message_links._LINKS_PATH.write_text("[]", encoding="utf-8")
+        self._env_patcher = unittest.mock.patch.dict("os.environ", {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "-100test",
+            "TELEGRAM_BOT_TOKEN": "fake:token",
+            "TELEGRAM_TOPIC_TASK_IDEAS": "10",
+            "TELEGRAM_TOPIC_TASK_READY": "30",
+            "TELEGRAM_TOPIC_TASK_ACTIVE": "20",
+        })
+        self._env_patcher.start()
+
+    def tearDown(self):
+        import os as _os
+        self._env_patcher.stop()
+        telegram_message_links._LINKS_PATH = self._orig_path
+        _os.unlink(self._tmp.name)
+
+    def _make_bot(self, message_id=101):
+        from unittest.mock import AsyncMock, MagicMock
+        bot = MagicMock()
+        sent = MagicMock()
+        sent.message_id = message_id
+        bot.send_message = AsyncMock(return_value=sent)
+        bot.edit_message_text = AsyncMock(return_value=MagicMock())
+        return bot
+
+    async def test_board_disabled_returns_skipped(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "false"}):
+            result = await telegram_board.sync_task_to_board("TASK-1")
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("board disabled", result["reason"])
+
+    async def test_no_token_returns_skipped(self):
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": ""}):
+            result = await telegram_board.sync_task_to_board("TASK-1")
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("token", result["reason"])
+
+    async def test_task_not_found_returns_skipped(self):
+        bot = self._make_bot()
+        with unittest.mock.patch("orchestrator.get_task", return_value=None):
+            result = await telegram_board.sync_task_to_board("TASK-999", bot=bot)
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("task not found", result["reason"])
+
+    async def test_success_returns_upsert_result(self):
+        """When board is enabled and task exists, sync returns the upsert result."""
+        task = {"id": "TASK-1", "title": "Test", "status": "idea"}
+        bot = self._make_bot(message_id=55)
+        with unittest.mock.patch("orchestrator.get_task", return_value=task):
+            result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertIn(result["status"], ("created", "updated", "recreated"))
+        self.assertEqual(result["task_id"], "TASK-1")
+
+    async def test_upsert_raises_returns_error_no_raise(self):
+        """If upsert_task_board_card raises, sync returns status='error' without re-raising."""
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        bot.send_message.side_effect = RuntimeError("network failure")
+        with unittest.mock.patch("orchestrator.get_task", return_value=task):
+            result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("network failure", result["reason"])
+
+    async def test_provided_bot_is_used_not_token(self):
+        """When bot= is provided, we never read TELEGRAM_BOT_TOKEN."""
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        # Remove the token from env — should still work because bot= is provided
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": ""}):
+            with unittest.mock.patch("orchestrator.get_task", return_value=task):
+                result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertNotEqual(result["status"], "skipped")
+
+    async def test_source_label_is_logged(self):
+        """sync_task_to_board accepts and uses the source= label (smoke test)."""
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        with unittest.mock.patch("orchestrator.get_task", return_value=task):
+            result = await telegram_board.sync_task_to_board(
+                "TASK-1", bot=bot, source="test:custom"
+            )
+        self.assertIn(result["status"], ("created", "updated", "recreated", "unchanged"))
+
+    async def test_auto_sync_disabled_skips_upsert(self):
+        """When TELEGRAM_BOARD_AUTO_SYNC=false, sync returns skipped without calling upsert."""
+        bot = self._make_bot()
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_AUTO_SYNC": "false"}):
+            result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("auto-sync disabled", result["reason"])
+        bot.send_message.assert_not_called()
+        bot.edit_message_text.assert_not_called()
+
+    async def test_auto_sync_disabled_zero_skips(self):
+        """TELEGRAM_BOARD_AUTO_SYNC=0 also disables auto-sync."""
+        bot = self._make_bot()
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_AUTO_SYNC": "0"}):
+            result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertEqual(result["status"], "skipped")
+
+    async def test_auto_sync_enabled_explicitly_calls_upsert(self):
+        """TELEGRAM_BOARD_AUTO_SYNC=true proceeds to upsert."""
+        task = {"id": "TASK-1", "title": "T", "status": "idea"}
+        bot = self._make_bot()
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_AUTO_SYNC": "true"}):
+            with unittest.mock.patch("orchestrator.get_task", return_value=task):
+                result = await telegram_board.sync_task_to_board("TASK-1", bot=bot)
+        self.assertIn(result["status"], ("created", "updated", "recreated", "unchanged"))
+
+
+class TestTelegramConfigAutoSync(unittest.TestCase):
+    """telegram-config CLI output includes TELEGRAM_BOARD_AUTO_SYNC."""
+
+    def _run_telegram_config(self, extra_env=None):
+        import subprocess, sys, os
+        env = dict(os.environ)
+        env.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+        env.update(extra_env or {})
+        r = subprocess.run(
+            [sys.executable, "run.py", "telegram-config"],
+            capture_output=True, text=True,
+            cwd="/Users/semionovk/MySpace/team",
+            env=env,
+        )
+        return r.stdout
+
+    def test_auto_sync_line_present(self):
+        out = self._run_telegram_config({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("TELEGRAM_BOARD_AUTO_SYNC=", out)
+
+    def test_auto_sync_true_when_board_enabled_and_var_missing(self):
+        out = self._run_telegram_config({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("TELEGRAM_BOARD_AUTO_SYNC=true", out)
+
+    def test_auto_sync_false_when_explicitly_set_false(self):
+        out = self._run_telegram_config({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_AUTO_SYNC": "false",
+        })
+        self.assertIn("TELEGRAM_BOARD_AUTO_SYNC=false", out)
+
+    def test_auto_sync_false_when_board_disabled_and_var_missing(self):
+        out = self._run_telegram_config({"TELEGRAM_BOARD_ENABLED": "false"})
+        self.assertIn("TELEGRAM_BOARD_AUTO_SYNC=false", out)
+
+
+class TestBoardConfigAutoSync(unittest.TestCase):
+    """board-config CLI output includes auto-sync line."""
+
+    def _run_board_config(self, extra_env=None):
+        import subprocess, sys, os
+        env = dict(os.environ)
+        env.pop("TELEGRAM_BOARD_AUTO_SYNC", None)
+        env.update(extra_env or {})
+        r = subprocess.run(
+            [sys.executable, "run.py", "board-config"],
+            capture_output=True, text=True,
+            cwd="/Users/semionovk/MySpace/team",
+            env=env,
+        )
+        return r.stdout
+
+    def test_auto_sync_line_present(self):
+        out = self._run_board_config({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("auto-sync:", out)
+
+    def test_auto_sync_true_by_default_when_board_enabled(self):
+        out = self._run_board_config({"TELEGRAM_BOARD_ENABLED": "true"})
+        self.assertIn("auto-sync: true", out)
+
+    def test_auto_sync_false_when_disabled(self):
+        out = self._run_board_config({
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_AUTO_SYNC": "false",
+        })
+        self.assertIn("auto-sync: false", out)
+
+
+class TestBoardSyncAfterCLI(unittest.TestCase):
+    """_board_sync_after_cmd helper in run.py — unit-level tests."""
+
+    def setUp(self):
+        self._board_vars = ["TELEGRAM_BOARD_ENABLED", "TELEGRAM_BOARD_CHAT_ID", "TELEGRAM_BOT_TOKEN"]
+
+    def test_skips_when_board_disabled(self):
+        """_board_sync_after_cmd does nothing when board is disabled."""
+        import io
+        import run as run_module
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "false"}):
+            captured = io.StringIO()
+            with unittest.mock.patch("sys.stdout", captured):
+                run_module._board_sync_after_cmd("TASK-1")
+        self.assertEqual(captured.getvalue(), "")
+
+    def test_prints_status_for_non_skipped(self):
+        """_board_sync_after_cmd prints 'Board: TASK-X <status>' when sync succeeds."""
+        import asyncio
+        import io
+        import run as run_module
+
+        async def _fake_sync(task_id, *, source="system"):
+            return {"status": "updated", "task_id": task_id}
+
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "true"}):
+            with unittest.mock.patch("telegram_board.sync_task_to_board", _fake_sync):
+                captured = io.StringIO()
+                with unittest.mock.patch("sys.stdout", captured):
+                    run_module._board_sync_after_cmd("TASK-1")
+        out = captured.getvalue()
+        self.assertIn("TASK-1", out)
+        self.assertIn("updated", out)
+
+    def test_no_output_for_skipped_status(self):
+        """_board_sync_after_cmd prints nothing for status='skipped'."""
+        import io
+        import run as run_module
+
+        async def _fake_sync(task_id, *, source="system"):
+            return {"status": "skipped", "task_id": task_id, "reason": "board disabled"}
+
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "true"}):
+            with unittest.mock.patch("telegram_board.sync_task_to_board", _fake_sync):
+                captured = io.StringIO()
+                with unittest.mock.patch("sys.stdout", captured):
+                    run_module._board_sync_after_cmd("TASK-1")
+        self.assertEqual(captured.getvalue(), "")
+
+    def test_exception_prints_warning_no_raise(self):
+        """_board_sync_after_cmd never raises — prints a warning line instead."""
+        import io
+        import run as run_module
+
+        async def _boom(task_id, *, source="system"):
+            raise RuntimeError("Telegram is down")
+
+        with unittest.mock.patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "true"}):
+            with unittest.mock.patch("telegram_board.sync_task_to_board", _boom):
+                captured = io.StringIO()
+                with unittest.mock.patch("sys.stdout", captured):
+                    run_module._board_sync_after_cmd("TASK-99")  # must not raise
+        self.assertIn("TASK-99", captured.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# sync_all_tasks_to_board
+# ---------------------------------------------------------------------------
+
+class TestSyncAllTasksToBoard(unittest.IsolatedAsyncioTestCase):
+
+    def _make_tasks(self, ids):
+        return [{"id": tid, "status": "idea", "type": "task", "title": f"Task {tid}", "priority": "medium",
+                 "depends_on": [], "blocked_by": [], "blocked_reason": "", "tags": [], "estimate": None,
+                 "related_decisions": [], "release_id": None, "artifacts": {}, "history": []} for tid in ids]
+
+    async def test_skipped_when_board_disabled(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "false"}):
+            result = await telegram_board.sync_all_tasks_to_board()
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("board disabled", result.get("reason", ""))
+
+    async def test_skipped_when_auto_sync_disabled(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "false"}):
+            result = await telegram_board.sync_all_tasks_to_board()
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("auto-sync disabled", result.get("reason", ""))
+
+    async def test_skipped_when_no_token(self):
+        env = {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "true"}
+        import os
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+            result = await telegram_board.sync_all_tasks_to_board()
+        self.assertEqual(result["status"], "skipped")
+
+    async def test_calls_sync_for_each_task(self):
+        tasks = self._make_tasks(["TASK-1", "TASK-2", "TASK-3"])
+        synced = []
+
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "created", "task_id": task_id, "message_id": 1}
+
+        env = {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "true",
+               "TELEGRAM_BOT_TOKEN": "fake-token"}
+        with patch.dict("os.environ", env):
+            with patch("orchestrator.list_tasks", return_value=tasks):
+                with patch("telegram_board.sync_task_to_board", _fake_sync):
+                    result = await telegram_board.sync_all_tasks_to_board(bot=object())
+        self.assertEqual(sorted(synced), ["TASK-1", "TASK-2", "TASK-3"])
+        self.assertEqual(result["total"], 3)
+        # "ok" from upsert is remapped to "created" in sync_task_to_board,
+        # but sync_all groups statuses from what sync_task_to_board returns
+        self.assertEqual(result["created"], 3)
+        self.assertEqual(result["status"], "ok")
+
+    async def test_single_task_error_does_not_abort_others(self):
+        tasks = self._make_tasks(["TASK-1", "TASK-2"])
+        call_count = [0]
+
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            call_count[0] += 1
+            if task_id == "TASK-1":
+                return {"status": "error", "task_id": task_id, "reason": "boom"}
+            return {"status": "updated", "task_id": task_id, "message_id": 2}
+
+        env = {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "true",
+               "TELEGRAM_BOT_TOKEN": "fake-token"}
+        with patch.dict("os.environ", env):
+            with patch("orchestrator.list_tasks", return_value=tasks):
+                with patch("telegram_board.sync_task_to_board", _fake_sync):
+                    result = await telegram_board.sync_all_tasks_to_board(bot=object())
+        self.assertEqual(call_count[0], 2)
+        self.assertEqual(result["error"], 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["status"], "error")
+
+    async def test_empty_task_list(self):
+        env = {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "true",
+               "TELEGRAM_BOT_TOKEN": "fake-token"}
+        with patch.dict("os.environ", env):
+            with patch("orchestrator.list_tasks", return_value=[]):
+                with patch("telegram_board.sync_task_to_board") as _mock:
+                    result = await telegram_board.sync_all_tasks_to_board(bot=object())
+        _mock.assert_not_called()
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["status"], "ok")
+
+    async def test_all_unchanged(self):
+        tasks = self._make_tasks(["TASK-1"])
+
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            return {"status": "unchanged", "task_id": task_id, "message_id": 5}
+
+        env = {"TELEGRAM_BOARD_ENABLED": "true", "TELEGRAM_BOARD_AUTO_SYNC": "true",
+               "TELEGRAM_BOT_TOKEN": "fake-token"}
+        with patch.dict("os.environ", env):
+            with patch("orchestrator.list_tasks", return_value=tasks):
+                with patch("telegram_board.sync_task_to_board", _fake_sync):
+                    result = await telegram_board.sync_all_tasks_to_board(bot=object())
+        self.assertEqual(result["unchanged"], 1)
+        self.assertEqual(result["status"], "ok")
+
+
+# ---------------------------------------------------------------------------
+# format_board_sync_summary
+# ---------------------------------------------------------------------------
+
+class TestFormatBoardSyncSummary(unittest.TestCase):
+
+    def test_skipped(self):
+        result = {"status": "skipped", "reason": "board disabled", "total": 0, "items": []}
+        text = telegram_board.format_board_sync_summary(result)
+        self.assertIn("пропущен", text)
+        self.assertIn("board disabled", text)
+
+    def test_ok_with_counts(self):
+        result = {
+            "status": "ok", "total": 5,
+            "created": 2, "updated": 1, "unchanged": 1, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 0, "error": 0,
+            "items": [],
+        }
+        text = telegram_board.format_board_sync_summary(result)
+        self.assertIn("✅", text)
+        self.assertIn("5", text)
+        self.assertIn("2", text)
+        self.assertIn("1", text)
+
+    def test_error_lists_failed_tasks(self):
+        result = {
+            "status": "error", "total": 3,
+            "created": 0, "updated": 0, "unchanged": 0, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 0, "error": 2,
+            "items": [
+                {"task_id": "TASK-1", "status": "error", "reason": "network failure"},
+                {"task_id": "TASK-2", "status": "created", "reason": None},
+                {"task_id": "TASK-3", "status": "error", "reason": "timeout"},
+            ],
+        }
+        text = telegram_board.format_board_sync_summary(result)
+        self.assertIn("⚠️", text)
+        self.assertIn("TASK-1", text)
+        self.assertIn("network failure", text)
+        self.assertIn("TASK-3", text)
+        # TASK-2 not shown (not error)
+        self.assertNotIn("TASK-2", text)
+
+    def test_no_zero_counts_shown(self):
+        result = {
+            "status": "ok", "total": 2,
+            "created": 2, "updated": 0, "unchanged": 0, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 0, "error": 0,
+            "items": [],
+        }
+        text = telegram_board.format_board_sync_summary(result)
+        self.assertNotIn("Обновлено: 0", text)
+        self.assertNotIn("Ошибок: 0", text)
+
+    def test_timeout_shown(self):
+        result = {
+            "status": "ok", "total": 1,
+            "created": 0, "updated": 0, "unchanged": 0, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 1, "error": 0,
+            "items": [],
+        }
+        text = telegram_board.format_board_sync_summary(result)
+        self.assertIn("Таймаут", text)
+
+
+# ---------------------------------------------------------------------------
+# board-sync CLI (cmd_board_sync)
+# ---------------------------------------------------------------------------
+
+class TestCmdBoardSync(unittest.TestCase):
+
+    def _run_cmd(self, extra_env: dict, extra_args: list | None = None) -> tuple[str, int]:
+        """Run `python3 run.py board-sync <extra_args>` and return (stdout, returncode)."""
+        import subprocess, sys
+        cmd = [sys.executable, "run.py", "board-sync"] + (extra_args or [])
+        env = {**__import__("os").environ.copy(), **extra_env}
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=".")
+        return result.stdout + result.stderr, result.returncode
+
+    def test_dry_run_no_token_required(self):
+        """--dry-run should work even without TELEGRAM_BOT_TOKEN."""
+        env = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_AUTO_SYNC": "true",
+        }
+        env.pop("TELEGRAM_BOT_TOKEN", None)
+        out, rc = self._run_cmd(env, ["--dry-run"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("dry run", out)
+
+    def test_dry_run_shows_task_count(self):
+        import subprocess, sys, os
+        env = {**os.environ.copy(),
+               "TELEGRAM_BOARD_ENABLED": "true",
+               "TELEGRAM_BOARD_AUTO_SYNC": "true"}
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-sync", "--dry-run"],
+            capture_output=True, text=True, env=env, cwd=".",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Tasks to sync:", result.stdout)
+
+    def test_live_mode_no_token_exits_1(self):
+        """cmd_board_sync exits 1 and prints error when no token is available."""
+        import argparse, io, os
+        import run as run_module
+        import telegram_board
+
+        # Patch os.getenv for TELEGRAM_BOT_TOKEN to return empty, all other values OK
+        original_getenv = os.getenv
+
+        def _patched_getenv(key, default=None):
+            if key == "TELEGRAM_BOT_TOKEN":
+                return ""
+            return original_getenv(key, default)
+
+        args = argparse.Namespace(dry_run=False, verbose=False)
+        env_overrides = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_AUTO_SYNC": "true",
+            "TELEGRAM_BOARD_CHAT_ID": "99999",
+        }
+        captured = io.StringIO()
+        with unittest.mock.patch.dict("os.environ", env_overrides):
+            with unittest.mock.patch("os.getenv", side_effect=_patched_getenv):
+                with unittest.mock.patch("telegram_board.is_board_enabled", return_value=True):
+                    with unittest.mock.patch("telegram_board.is_board_auto_sync_enabled", return_value=True):
+                        with unittest.mock.patch("telegram_board.get_board_chat_id", return_value="99999"):
+                            with unittest.mock.patch("sys.stdout", captured):
+                                with self.assertRaises(SystemExit) as cm:
+                                    run_module.cmd_board_sync(args)
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("TELEGRAM_BOT_TOKEN", captured.getvalue())
+
+    def test_live_mode_board_disabled_exits_1(self):
+        env: dict = {
+            "TELEGRAM_BOARD_ENABLED": "false",
+            "TELEGRAM_BOT_TOKEN": "fake",
+            "TELEGRAM_BOARD_CHAT_ID": "99999",
+        }
+        import subprocess, sys, os
+        clean_env = {**os.environ.copy(), **env}
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-sync"],
+            capture_output=True, text=True, env=clean_env, cwd=".",
+        )
+        self.assertEqual(result.returncode, 1)
+
+    def test_live_mode_auto_sync_disabled_exits_1(self):
+        env: dict = {
+            "TELEGRAM_BOARD_ENABLED": "true",
+            "TELEGRAM_BOARD_AUTO_SYNC": "false",
+            "TELEGRAM_BOT_TOKEN": "fake",
+            "TELEGRAM_BOARD_CHAT_ID": "99999",
+        }
+        import subprocess, sys, os
+        clean_env = {**os.environ.copy(), **env}
+        result = subprocess.run(
+            [sys.executable, "run.py", "board-sync"],
+            capture_output=True, text=True, env=clean_env, cwd=".",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("auto-sync", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

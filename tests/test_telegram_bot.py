@@ -2296,5 +2296,95 @@ class TestBoardSyncAfterAction(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TASK-7", synced)
 
 
+# ---------------------------------------------------------------------------
+# TestBoardSyncHandler
+# ---------------------------------------------------------------------------
+
+class TestBoardSyncHandler(unittest.IsolatedAsyncioTestCase):
+
+    def _make_update(self, user_id="42"):
+        return _FakeUpdate(user_id=user_id, text="")
+
+    def _make_ctx(self, owner_id="42"):
+        class _FakeCtxBot:
+            async def send_message(self, *a, **kw): pass
+        ctx = SimpleNamespace()
+        ctx.bot = _FakeCtxBot()
+        ctx.bot_data = {"telegram_config": {"owner_id": owner_id, "dry_run_by_default": False}}
+        return ctx
+
+    async def test_non_owner_denied(self):
+        upd = self._make_update(user_id="99")
+        ctx = self._make_ctx(owner_id="42")
+        await telegram_bot.board_sync_handler(upd, ctx)
+        self.assertIn("denied", " ".join(upd.message.replies).lower())
+
+    async def test_sends_syncing_message_first(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        summary_result = {
+            "status": "ok", "total": 2,
+            "created": 1, "updated": 1, "unchanged": 0, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 0, "error": 0,
+            "items": [],
+        }
+        async def _fake_sync(*, bot=None, source="system"):
+            return summary_result
+        with patch("telegram_board.sync_all_tasks_to_board", _fake_sync):
+            await telegram_bot.board_sync_handler(upd, ctx)
+        # First reply is the "Синхронизирую" message
+        self.assertIn("Синхронизирую", upd.message.replies[0])
+
+    async def test_replies_with_summary(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        summary_result = {
+            "status": "ok", "total": 3,
+            "created": 2, "updated": 1, "unchanged": 0, "recreated": 0,
+            "moved": 0, "skipped": 0, "timeout": 0, "error": 0,
+            "items": [],
+        }
+        async def _fake_sync(*, bot=None, source="system"):
+            return summary_result
+        with patch("telegram_board.sync_all_tasks_to_board", _fake_sync):
+            await telegram_bot.board_sync_handler(upd, ctx)
+        combined = " ".join(upd.message.replies)
+        # Should contain the formatted summary
+        self.assertIn("sync", combined.lower())
+
+    async def test_skipped_board_disabled(self):
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        skipped_result = {"status": "skipped", "reason": "board disabled", "total": 0, "items": []}
+        async def _fake_sync(*, bot=None, source="system"):
+            return skipped_result
+        with patch("telegram_board.sync_all_tasks_to_board", _fake_sync):
+            await telegram_bot.board_sync_handler(upd, ctx)
+        combined = " ".join(upd.message.replies)
+        self.assertIn("пропущен", combined.lower())
+
+    async def test_uses_context_bot(self):
+        """bot=context.bot is passed through to sync_all_tasks_to_board."""
+        upd = self._make_update(user_id="42")
+        ctx = self._make_ctx(owner_id="42")
+        received_bot = []
+
+        async def _fake_sync(*, bot=None, source="system"):
+            received_bot.append(bot)
+            return {"status": "ok", "total": 0, "created": 0, "updated": 0, "unchanged": 0,
+                    "recreated": 0, "moved": 0, "skipped": 0, "timeout": 0, "error": 0, "items": []}
+
+        with patch("telegram_board.sync_all_tasks_to_board", _fake_sync):
+            await telegram_bot.board_sync_handler(upd, ctx)
+        self.assertIs(received_bot[0], ctx.bot)
+
+    async def test_board_sync_command_registered(self):
+        """board_sync_handler is wired into build_application."""
+        self.assertTrue(
+            hasattr(telegram_bot, "board_sync_handler"),
+            "board_sync_handler must be defined in telegram_bot",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

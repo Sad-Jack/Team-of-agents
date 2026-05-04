@@ -258,6 +258,7 @@ Forum-группа используется как проектная доска
 | `TELEGRAM_BOARD_CHAT_ID` | ID форум-группы (отрицательное число). |
 | `TELEGRAM_BOARD_SEND_TIMEOUT_SECONDS` | Таймаут отправки (секунды). По умолчанию `20`. |
 | `TELEGRAM_BOARD_ARCHIVE_OLD_ON_MOVE` | При смене топика заменять старую карточку надгробием. По умолчанию `true`. |
+| `TELEGRAM_BOARD_AUTO_SYNC` | Автоматически синхронизировать карточки после изменений задач через CLI/бот. По умолчанию `true` (когда `TELEGRAM_BOARD_ENABLED=true`). Установи `false` чтобы отключить. |
 | `TELEGRAM_TOPIC_TASK_IDEAS` | message_thread_id топика "Task Ideas" |
 | `TELEGRAM_TOPIC_TASK_READY` | message_thread_id топика "Task Ready" |
 | `TELEGRAM_TOPIC_TASK_ACTIVE` | message_thread_id топика "Task Active" |

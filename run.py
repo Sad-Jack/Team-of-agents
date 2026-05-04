@@ -204,9 +204,30 @@ def _load_task_for_update(task_id: str):
     return tasks, task
 
 
+def _board_sync_after_cmd(task_id: str, *, source: str = "cli") -> None:
+    """Fire-and-forget Board sync after a CLI command that mutated a task.
+
+    Prints a single status line for non-skipped outcomes.
+    Never raises — board sync failures are surfaced as warnings, not errors.
+    Does nothing when TELEGRAM_BOARD_ENABLED is falsy.
+    """
+    import asyncio
+    import telegram_board
+    if not telegram_board.is_board_enabled():
+        return
+    try:
+        result = asyncio.run(telegram_board.sync_task_to_board(task_id, source=source))
+        status = result.get("status", "?")
+        if status != "skipped":
+            print(f"Board: {task_id} {status}")
+    except Exception as exc:
+        print(f"Board sync warning for {task_id}: {exc}")
+
+
 def cmd_create(args):
     task = create_task(args.title, args.description)
     print(f"Created {task['id']} with status={task['status']}")
+    _board_sync_after_cmd(task["id"], source="cli:create")
 
 
 def cmd_create_bug(args):
@@ -228,6 +249,7 @@ def cmd_create_bug(args):
     )
     validate_all_tasks()
     print(f"Created {bug['id']} with status={bug['status']}")
+    _board_sync_after_cmd(bug["id"], source="cli:create-bug")
 
 
 def cmd_list(_args):
@@ -535,6 +557,7 @@ def cmd_run_next(args):
     if task is None:
         raise ValueError(message)
     print(f"{task['id']} moved to {task['status']}: {message}")
+    _board_sync_after_cmd(task["id"], source="cli:run-next")
 
 
 def cmd_run_all(args):
@@ -545,6 +568,7 @@ def cmd_run_all(args):
         return
     for item in processed:
         print(f"{item['id']} -> {item['status']}: {item['message']}")
+        _board_sync_after_cmd(item["id"], source="cli:run-all")
 
 
 def cmd_validate(_args):
@@ -632,6 +656,12 @@ def cmd_telegram_config(_args):
         "1", "true", "yes", "y", "on"
     }
     board_chat_set = bool((os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip())
+    _auto_sync_raw = (os.getenv("TELEGRAM_BOARD_AUTO_SYNC") or "").strip()
+    board_auto_sync = (
+        _auto_sync_raw.lower() in {"1", "true", "yes", "y", "on"}
+        if _auto_sync_raw
+        else board_enabled
+    )
     print(f"TELEGRAM_BOT_TOKEN_SET={str(token_set).lower()}")
     print(f"TELEGRAM_OWNER_ID_SET={str(owner_set).lower()}")
     print(f"TELEGRAM_DRY_RUN_BY_DEFAULT={str(dry_run_default).lower()}")
@@ -639,6 +669,7 @@ def cmd_telegram_config(_args):
     print(f"TELEGRAM_FAST_ROUTER_ENABLED={str(fast_router_enabled).lower()}")
     print(f"TELEGRAM_BOARD_ENABLED={str(board_enabled).lower()}")
     print(f"TELEGRAM_BOARD_CHAT_ID_SET={str(board_chat_set).lower()}")
+    print(f"TELEGRAM_BOARD_AUTO_SYNC={str(board_auto_sync).lower()}")
     _board_topics = [
         "TASK_IDEAS", "TASK_READY", "TASK_ACTIVE", "TASK_BLOCKED",
         "BUGS_NEW", "BUGS_ACTIVE", "NEEDS_INPUT",
@@ -681,9 +712,16 @@ def cmd_board_config(_args):
         "1", "true", "yes", "y", "on"
     }
     chat_id_set = bool((os.getenv("TELEGRAM_BOARD_CHAT_ID") or "").strip())
+    _auto_raw = (os.getenv("TELEGRAM_BOARD_AUTO_SYNC") or "").strip()
+    auto_sync = (
+        _auto_raw.lower() in {"1", "true", "yes", "y", "on"}
+        if _auto_raw
+        else enabled
+    )
 
     print("Telegram Board configuration:")
     print(f"- enabled: {str(enabled).lower()}")
+    print(f"- auto-sync: {str(auto_sync).lower()}")
     print(f"- board chat configured: {str(chat_id_set).lower()}")
     print()
     print("Topics:")
@@ -952,6 +990,84 @@ def cmd_board_post_task(args):
             raise SystemExit(1)
 
     asyncio.run(_run_upsert())
+
+
+def cmd_board_sync(args):
+    """Sync all task cards to the Telegram Board.
+
+    With --dry-run shows what would be synced without calling Telegram.
+    With --verbose prints item-level results.
+    Does not print TELEGRAM_BOT_TOKEN or absolute paths.
+    """
+    import telegram_board
+
+    dry_run: bool = getattr(args, "dry_run", False)
+    verbose: bool = getattr(args, "verbose", False)
+
+    if dry_run:
+        import orchestrator as _orch
+        tasks = _orch.list_tasks()
+        board_enabled = telegram_board.is_board_enabled()
+        auto_sync = telegram_board.is_board_auto_sync_enabled()
+        board_chat_id = telegram_board.get_board_chat_id()
+        token_set = bool((os.getenv("TELEGRAM_BOT_TOKEN") or "").strip())
+        print("Board sync — dry run (no messages sent)")
+        print(f"TELEGRAM_BOARD_ENABLED: {str(board_enabled).lower()}")
+        print(f"TELEGRAM_BOARD_AUTO_SYNC: {str(auto_sync).lower()}")
+        print(f"TELEGRAM_BOARD_CHAT_ID: {'(set)' if board_chat_id else '(not set)'}")
+        print(f"TELEGRAM_BOT_TOKEN: {'(set)' if token_set else '(not set)'}")
+        print(f"Tasks to sync: {len(tasks)}")
+        if verbose:
+            print()
+            for task in tasks:
+                tid = task.get("id", "?")
+                status = task.get("status", "?")
+                topic_key = telegram_board.topic_key_for_task(task)
+                topic_id = telegram_board.get_topic_id(topic_key)
+                topic_note = f"thread={topic_id}" if topic_id else "topic NOT SET"
+                print(f"  {tid} [{status}] → {topic_key} ({topic_note})")
+        return
+
+    # Live mode
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        print("Error: TELEGRAM_BOT_TOKEN is not set")
+        raise SystemExit(1)
+
+    if not telegram_board.is_board_enabled():
+        print("Telegram Board is disabled (TELEGRAM_BOARD_ENABLED=false)")
+        raise SystemExit(1)
+
+    if not telegram_board.is_board_auto_sync_enabled():
+        print("Board auto-sync is disabled (TELEGRAM_BOARD_AUTO_SYNC=false)")
+        raise SystemExit(1)
+
+    board_chat_id = telegram_board.get_board_chat_id()
+    if not board_chat_id:
+        print("Error: TELEGRAM_BOARD_CHAT_ID is not set")
+        raise SystemExit(1)
+
+    import asyncio
+
+    async def _run_sync():
+        try:
+            from telegram import Bot
+        except ImportError:
+            print("Error: python-telegram-bot is not installed")
+            raise SystemExit(1)
+
+        bot = Bot(token=token)
+        result = await telegram_board.sync_all_tasks_to_board(bot=bot, source="cli:board-sync")
+        print(telegram_board.format_board_sync_summary(result))
+        if verbose:
+            print()
+            for item in result.get("items", []):
+                reason = f" — {item['reason']}" if item.get("reason") else ""
+                print(f"  {item['task_id']}: {item['status']}{reason}")
+        if result.get("status") == "error":
+            raise SystemExit(1)
+
+    asyncio.run(_run_sync())
 
 
 def cmd_managed_project(_args):
@@ -1576,11 +1692,15 @@ def cmd_task_status(args):
 
 
 def cmd_prepare_task(args):
-    print(json.dumps(prepare_task_for_development(args.id), ensure_ascii=False, indent=2))
+    result = prepare_task_for_development(args.id)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    _board_sync_after_cmd(args.id, source="cli:prepare-task")
 
 
 def cmd_advance_task(args):
-    print(json.dumps(advance_task_safely(args.id, target_status=args.target), ensure_ascii=False, indent=2))
+    result = advance_task_safely(args.id, target_status=args.target)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    _board_sync_after_cmd(args.id, source="cli:advance-task")
 
 
 def cmd_next_work(_args):
@@ -2233,6 +2353,19 @@ def build_parser():
         help="Always create a new message, overwriting the stored mapping",
     )
     board_post_task_parser.set_defaults(func=cmd_board_post_task)
+
+    board_sync_parser = subparsers.add_parser(
+        "board-sync", help="Sync all task cards to the Telegram Board"
+    )
+    board_sync_parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Preview sync without sending to Telegram",
+    )
+    board_sync_parser.add_argument(
+        "--verbose", action="store_true", default=False,
+        help="Print item-level results",
+    )
+    board_sync_parser.set_defaults(func=cmd_board_sync)
 
     telegram_parser = subparsers.add_parser("telegram", help="Run Telegram bot in polling mode")
     telegram_parser.set_defaults(func=cmd_telegram)

@@ -1,4 +1,4 @@
-.PHONY: setup start test doctor telegram-config
+.PHONY: setup start test doctor telegram-config check check-fast
 
 setup:
 	./setup.sh
@@ -14,3 +14,10 @@ doctor:
 
 telegram-config:
 	python3 run.py telegram-config
+
+## Quality-gate checks
+check:
+	./scripts/check.sh
+
+check-fast:
+	./scripts/check.sh --fast
