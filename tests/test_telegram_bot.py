@@ -205,18 +205,20 @@ class TelegramBotTests(unittest.TestCase):
     def test_plain_text_uses_dry_run_when_default_true(self):
         upd = _FakeUpdate(user_id=1, text="Создай задачу")
         ctx = SimpleNamespace(args=[], bot_data={"telegram_config": {"owner_id": "1", "dry_run_by_default": True}})
-        with patch("telegram_bot.plan_supervisor_action", return_value={
-            "intent": "create_task",
-            "confidence": 0.9,
-            "requires_confirmation": False,
-            "action": {"name": "create_task", "args": {}},
-            "explanation": "ok",
-            "warnings": [],
-        }) as plan_mock:
-            with patch("telegram_bot.execute_supervisor_action") as exec_mock:
-                asyncio.run(telegram_bot.text_handler(upd, ctx))
-                plan_mock.assert_called_once()
-                exec_mock.assert_not_called()
+        # Bypass create router so the test stays focused on dry-run routing logic.
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value={
+                "intent": "create_task",
+                "confidence": 0.9,
+                "requires_confirmation": False,
+                "action": {"name": "create_task", "args": {}},
+                "explanation": "ok",
+                "warnings": [],
+            }) as plan_mock:
+                with patch("telegram_bot.execute_supervisor_action") as exec_mock:
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+                    plan_mock.assert_called_once()
+                    exec_mock.assert_not_called()
 
     def test_status_includes_managed_project_info(self):
         upd = _FakeUpdate(user_id=1, text="/status")
@@ -405,16 +407,18 @@ class TestPendingActions(unittest.TestCase):
     def test_dry_run_stores_pending_action(self):
         upd = _FakeUpdate(user_id="42", text="создай задачу")
         ctx = _make_ctx()
-        with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
-            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
         self.assertIn("telegram:42", telegram_bot.PENDING_ACTIONS)
 
     def test_dry_run_shows_inline_buttons(self):
         upd = _FakeUpdate(user_id="42", text="создай задачу")
         ctx = _make_ctx()
         with _patch_telegram():
-            with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
-                asyncio.run(telegram_bot.text_handler(upd, ctx))
+            with patch("telegram_create_router.detect_create_intent", return_value=None):
+                with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
+                    asyncio.run(telegram_bot.text_handler(upd, ctx))
         self.assertTrue(
             any(m is not None for m in upd.message.reply_markups),
             "Expected inline keyboard markup in reply",
@@ -503,8 +507,9 @@ class TestPendingActions(unittest.TestCase):
         new_plan = {**_CREATE_TASK_PLAN, "action": {"name": "create_task", "args": {"title": "New"}}}
         upd = _FakeUpdate(user_id="42", text="создай задачу New")
         ctx = _make_ctx()
-        with patch("telegram_bot.plan_supervisor_action", return_value=new_plan):
-            asyncio.run(telegram_bot.text_handler(upd, ctx))
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value=new_plan):
+                asyncio.run(telegram_bot.text_handler(upd, ctx))
         self.assertEqual(
             telegram_bot.PENDING_ACTIONS["telegram:42"]["text"], "создай задачу New"
         )
@@ -557,9 +562,10 @@ class TestStatusNotifications(unittest.TestCase):
         ctx = _make_ctx(bot=bot)
         ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
         with patch.dict("os.environ", {"TELEGRAM_STATUS_CHAT_ID": "100"}, clear=False):
-            with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
-                with patch("telegram_bot.execute_supervisor_action", return_value=_CREATE_TASK_RESULT):
-                    asyncio.run(telegram_bot.text_handler(upd, ctx))
+            with patch("telegram_create_router.detect_create_intent", return_value=None):
+                with patch("telegram_bot.plan_supervisor_action", return_value=_CREATE_TASK_PLAN):
+                    with patch("telegram_bot.execute_supervisor_action", return_value=_CREATE_TASK_RESULT):
+                        asyncio.run(telegram_bot.text_handler(upd, ctx))
         self.assertTrue(any("TASK-99" in m["text"] for m in bot.sent))
 
     def test_execute_create_bug_sends_notification(self):
@@ -979,17 +985,18 @@ class TestFastRouterIntegration(unittest.TestCase):
         ctx.bot_data["telegram_config"]["dry_run_by_default"] = False
         with patch.dict("os.environ", {"TELEGRAM_FAST_ROUTER_ENABLED": "true"}, clear=False):
             with patch("telegram_fast_router.try_route", return_value=None):
-                with patch("telegram_bot.plan_supervisor_action", return_value={
-                    "intent": "create_task", "confidence": 0.9,
-                    "requires_confirmation": False,
-                    "action": {"name": "create_task", "args": {"title": "тест"}},
-                    "explanation": "ok", "warnings": [],
-                }) as plan_mock:
-                    with patch("telegram_bot.execute_supervisor_action", return_value={
-                        "executed": True, "action": "create_task",
-                        "result": {"id": "TASK-99", "title": "тест", "status": "idea"},
-                    }):
-                        asyncio.run(telegram_bot.text_handler(upd, ctx))
+                with patch("telegram_create_router.detect_create_intent", return_value=None):
+                    with patch("telegram_bot.plan_supervisor_action", return_value={
+                        "intent": "create_task", "confidence": 0.9,
+                        "requires_confirmation": False,
+                        "action": {"name": "create_task", "args": {"title": "тест"}},
+                        "explanation": "ok", "warnings": [],
+                    }) as plan_mock:
+                        with patch("telegram_bot.execute_supervisor_action", return_value={
+                            "executed": True, "action": "create_task",
+                            "result": {"id": "TASK-99", "title": "тест", "status": "idea"},
+                        }):
+                            asyncio.run(telegram_bot.text_handler(upd, ctx))
         plan_mock.assert_called_once()
 
     def test_reply_context_bypasses_fast_router(self):
@@ -1712,12 +1719,13 @@ class TestFocusIndicatorInResponses(unittest.IsolatedAsyncioTestCase):
         result = {"executed": True, "action": "create_task",
                   "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
 
-        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
-            with patch("telegram_bot.execute_supervisor_action", return_value=result):
-                with patch("telegram_bot.get_focus", return_value=active_focus):
-                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "Healthcheck", "status": "idea"}):
-                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
-                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+                with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                    with patch("telegram_bot.get_focus", return_value=active_focus):
+                        with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "Healthcheck", "status": "idea"}):
+                            with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+                                await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
 
         combined = "\n".join(upd.message.replies)
         self.assertIn("🎯", combined)
@@ -1754,12 +1762,13 @@ class TestFocusIndicatorInResponses(unittest.IsolatedAsyncioTestCase):
         result = {"executed": True, "action": "create_task",
                   "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
 
-        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
-            with patch("telegram_bot.execute_supervisor_action", return_value=result):
-                with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
-                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
-                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_set:
-                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+                with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                    with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
+                        with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
+                            with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}) as mock_set:
+                                await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
 
         # set_active_task should have been called to RESTORE pre_task focus
         mock_set.assert_called_once_with(
@@ -1778,12 +1787,13 @@ class TestFocusIndicatorInResponses(unittest.IsolatedAsyncioTestCase):
         result = {"executed": True, "action": "create_task",
                   "result": {"id": "TASK-99", "title": "T", "status": "idea"}}
 
-        with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
-            with patch("telegram_bot.execute_supervisor_action", return_value=result):
-                with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
-                    with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
-                        with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
-                            await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
+        with patch("telegram_create_router.detect_create_intent", return_value=None):
+            with patch("telegram_bot.plan_supervisor_action", return_value=self._PLAN):
+                with patch("telegram_bot.execute_supervisor_action", return_value=result):
+                    with patch("telegram_bot.get_focus", side_effect=[pre_focus, post_focus]):
+                        with patch("telegram_bot.orchestrator.get_task", return_value={"id": "TASK-1", "title": "HC", "status": "idea"}):
+                            with patch("telegram_bot.set_active_task", return_value={"session_id": "s"}):
+                                await telegram_bot.handle_user_text(upd, ctx, "создай задачу T", force_execute=True)
 
         combined = "\n".join(upd.message.replies)
         self.assertIn("TASK-1", combined)
@@ -2384,6 +2394,242 @@ class TestBoardSyncHandler(unittest.IsolatedAsyncioTestCase):
             hasattr(telegram_bot, "board_sync_handler"),
             "board_sync_handler must be defined in telegram_bot",
         )
+
+
+# ---------------------------------------------------------------------------
+# TestErrorLogging
+# ---------------------------------------------------------------------------
+
+class TestErrorLogging(unittest.IsolatedAsyncioTestCase):
+    """Tests for write_error_log() and the error_handler."""
+
+    def _make_exc(self, msg="test error"):
+        """Return an exception that has a real __traceback__."""
+        try:
+            raise ValueError(msg)
+        except ValueError as e:
+            return e
+
+    def _make_context(self, exc):
+        return SimpleNamespace(error=exc)
+
+    # ------------------------------------------------------------------
+    # write_error_log — unit tests
+    # ------------------------------------------------------------------
+
+    def test_write_error_log_creates_file(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc()
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            error_id, log_path = telegram_bot.write_error_log(exc)
+        self.assertTrue(log_path.exists(), "Log file was not created")
+        log_files = list(tmpdir.glob("TG-*.log"))
+        self.assertEqual(len(log_files), 1)
+
+    def test_write_error_log_id_format(self):
+        import tempfile, re
+        from pathlib import Path
+        exc = self._make_exc()
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            error_id, _ = telegram_bot.write_error_log(exc)
+        self.assertRegex(error_id, r"^TG-\d{8}-\d{6}-[0-9a-f]{4}$")
+
+    def test_write_error_log_contains_traceback(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc("traceback test")
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            error_id, log_path = telegram_bot.write_error_log(exc)
+        content = log_path.read_text(encoding="utf-8")
+        self.assertIn("--- traceback ---", content)
+        self.assertIn("ValueError", content)
+
+    def test_write_error_log_contains_exception_message(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc("unique error message xyz")
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            _, log_path = telegram_bot.write_error_log(exc)
+        content = log_path.read_text(encoding="utf-8")
+        self.assertIn("unique error message xyz", content)
+        self.assertIn("exception_class: ValueError", content)
+
+    def test_write_error_log_no_secrets(self):
+        """TELEGRAM_BOT_TOKEN must never appear in the log file."""
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc()
+        tmpdir = Path(tempfile.mkdtemp())
+        secret_token = "SECRET_TG_TOKEN_12345"
+        with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": secret_token}, clear=False):
+            with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+                _, log_path = telegram_bot.write_error_log(exc)
+        content = log_path.read_text(encoding="utf-8")
+        self.assertNotIn(secret_token, content)
+
+    def test_write_error_log_includes_user_id(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc()
+        upd = _FakeUpdate(user_id="55555", text="тест")
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            _, log_path = telegram_bot.write_error_log(exc, update=upd)
+        content = log_path.read_text(encoding="utf-8")
+        self.assertIn("55555", content)
+
+    def test_write_error_log_never_raises_on_write_failure(self):
+        """Even if the directory can't be created, write_error_log must not raise."""
+        exc = self._make_exc()
+        from pathlib import Path
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", Path("/nonexistent/path/that/cannot/be/created")):
+            error_id, log_path = telegram_bot.write_error_log(exc)
+        # Must return a valid error_id regardless
+        self.assertTrue(error_id.startswith("TG-"))
+
+    # ------------------------------------------------------------------
+    # error_handler — integration tests
+    # ------------------------------------------------------------------
+
+    async def test_error_handler_reply_contains_error_id(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc("some failure")
+        context_ns = self._make_context(exc)
+        upd = _FakeUpdate(user_id="42", text="test command")
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(upd, context_ns)
+        combined = " ".join(upd.message.replies)
+        self.assertIn("Error ID: TG-", combined)
+
+    async def test_error_handler_reply_contains_log_path(self):
+        import tempfile
+        from pathlib import Path
+        exc = self._make_exc("some failure")
+        context_ns = self._make_context(exc)
+        upd = _FakeUpdate(user_id="42", text="test command")
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(upd, context_ns)
+        combined = " ".join(upd.message.replies)
+        self.assertIn("Лог:", combined)
+        self.assertIn(".log", combined)
+
+    async def test_error_handler_friendly_message_for_empty_output(self):
+        """'Claude Code returned empty output' → friendly explanation in reply."""
+        exc = self._make_exc("Claude Code returned empty output.")
+        context_ns = self._make_context(exc)
+        upd = _FakeUpdate(user_id="42", text="test command")
+        import tempfile
+        from pathlib import Path
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(upd, context_ns)
+        combined = " ".join(upd.message.replies)
+        self.assertIn("Claude Code", combined)
+        self.assertIn("пустой ответ", combined)
+        # Error ID must still appear
+        self.assertIn("Error ID: TG-", combined)
+
+    async def test_error_handler_generic_message_for_other_errors(self):
+        """Generic errors get 'Произошла внутренняя ошибка.' header."""
+        exc = self._make_exc("some random failure")
+        context_ns = self._make_context(exc)
+        upd = _FakeUpdate(user_id="42", text="test")
+        import tempfile
+        from pathlib import Path
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(upd, context_ns)
+        combined = " ".join(upd.message.replies)
+        self.assertIn("внутренняя ошибка", combined)
+
+    async def test_error_handler_no_update_does_not_raise(self):
+        """error_handler with update=None must complete without raising."""
+        exc = self._make_exc()
+        context_ns = self._make_context(exc)
+        import tempfile
+        from pathlib import Path
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(None, context_ns)  # no update
+
+    async def test_error_handler_none_exc_does_not_raise(self):
+        """error_handler with no error in context must do nothing."""
+        context_ns = SimpleNamespace(error=None)
+        upd = _FakeUpdate(user_id="42", text="")
+        import tempfile
+        from pathlib import Path
+        tmpdir = Path(tempfile.mkdtemp())
+        with patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.error_handler(upd, context_ns)
+        # No replies expected
+        self.assertEqual(upd.message.replies, [])
+
+    # ------------------------------------------------------------------
+    # Voice downstream error → error log + Error ID
+    # ------------------------------------------------------------------
+
+    async def test_voice_downstream_error_creates_log(self):
+        """handle_user_text raises inside voice_handler → error log file created."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock
+
+        upd = _FakeUpdate(user_id="42", voice=SimpleNamespace(file_id="f1"))
+        bot = MagicMock()
+        bot.get_file = AsyncMock(return_value=_FakeTGFile())
+        ctx = MagicMock()
+        ctx.bot = bot
+        ctx.bot_data = {"telegram_config": {"owner_id": "42", "dry_run_by_default": True}}
+        tmpdir = Path(tempfile.mkdtemp())
+
+        with patch("telegram_bot.is_voice_enabled", return_value=True), \
+             patch("telegram_bot.ensure_voice_work_dir", return_value=tmpdir), \
+             patch("telegram_bot.convert_voice_to_wav"), \
+             patch("telegram_bot.transcribe_audio", return_value="тест"), \
+             patch("telegram_bot.handle_user_text", side_effect=RuntimeError("Claude empty output")), \
+             patch("telegram_bot.should_keep_voice_files", return_value=False), \
+             patch("telegram_bot.cleanup_voice_files"), \
+             patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.voice_handler(upd, ctx)
+
+        log_files = list(tmpdir.glob("TG-*.log"))
+        self.assertGreaterEqual(len(log_files), 1)
+
+    async def test_voice_downstream_error_reply_has_error_id(self):
+        """Voice downstream error reply includes 'Error ID: TG-...'."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock
+
+        upd = _FakeUpdate(user_id="42", voice=SimpleNamespace(file_id="f2"))
+        bot = MagicMock()
+        bot.get_file = AsyncMock(return_value=_FakeTGFile())
+        ctx = MagicMock()
+        ctx.bot = bot
+        ctx.bot_data = {"telegram_config": {"owner_id": "42", "dry_run_by_default": True}}
+        tmpdir = Path(tempfile.mkdtemp())
+
+        with patch("telegram_bot.is_voice_enabled", return_value=True), \
+             patch("telegram_bot.ensure_voice_work_dir", return_value=tmpdir), \
+             patch("telegram_bot.convert_voice_to_wav"), \
+             patch("telegram_bot.transcribe_audio", return_value="тест"), \
+             patch("telegram_bot.handle_user_text", side_effect=RuntimeError("some downstream failure")), \
+             patch("telegram_bot.should_keep_voice_files", return_value=False), \
+             patch("telegram_bot.cleanup_voice_files"), \
+             patch.object(telegram_bot, "_ERROR_LOG_DIR", tmpdir):
+            await telegram_bot.voice_handler(upd, ctx)
+
+        combined = " ".join(upd.message.replies)
+        self.assertIn("Error ID: TG-", combined)
+        self.assertIn("Голос распознан", combined)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ from supervisor import (
 )
 import telegram_message_links
 import telegram_fast_router
+import telegram_create_router
 
 
 def truncate_text(text: str, limit: int = 3500) -> str:
@@ -123,6 +124,81 @@ async def send_status_notification(context: Any, text: str) -> None:
 
 def is_debug_mode() -> bool:
     return _parse_bool(os.getenv("TELEGRAM_DEBUG_MODE"), default=False)
+
+
+# ---------------------------------------------------------------------------
+# Persistent error logging
+# ---------------------------------------------------------------------------
+
+_ERROR_LOG_DIR = Path(".tmp/logs/errors")
+
+
+def write_error_log(
+    exc: BaseException,
+    update: Any = None,
+    handler_name: str | None = None,
+) -> "tuple[str, Path]":
+    """Write an error to ``.tmp/logs/errors/TG-YYYYMMDD-HHMMSS-<4hex>.log``.
+
+    Returns ``(error_id, log_path)``.  Never raises — if the write fails the
+    error is logged to the standard logger and a fallback ID is returned.
+
+    Security: TELEGRAM_BOT_TOKEN and other secrets are never written.
+    Only the user_id, chat_id, and a truncated message text are included.
+    """
+    import traceback as _tb_mod
+
+    now = datetime.datetime.now()
+    short_id = uuid.uuid4().hex[:4]
+    error_id = f"TG-{now.strftime('%Y%m%d-%H%M%S')}-{short_id}"
+
+    # --- safe context from update (no secrets) ---
+    update_type = type(update).__name__ if update is not None else "None"
+    user_id_str = ""
+    chat_id_str = ""
+    msg_text = ""
+    if update is not None:
+        user = getattr(update, "effective_user", None)
+        if user is not None:
+            user_id_str = str(getattr(user, "id", ""))
+        chat = getattr(update, "effective_chat", None)
+        if chat is not None:
+            chat_id_str = str(getattr(chat, "id", ""))
+        message = getattr(update, "message", None)
+        if message is not None:
+            raw = getattr(message, "text", "") or ""
+            msg_text = raw[:500]  # truncate; never log tokens
+
+    tb_str = "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
+
+    content_lines = [
+        f"timestamp: {now.isoformat()}",
+        f"error_id: {error_id}",
+        f"handler: {handler_name or 'unknown'}",
+        f"update_type: {update_type}",
+        f"user_id: {user_id_str or '(none)'}",
+        f"chat_id: {chat_id_str or '(none)'}",
+        f"message_text: {msg_text or '(none)'}",
+        f"exception_class: {type(exc).__name__}",
+        f"exception_message: {exc}",
+        "",
+        "--- traceback ---",
+        tb_str,
+    ]
+
+    log_path = _ERROR_LOG_DIR / f"{error_id}.log"
+    try:
+        _ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("\n".join(content_lines), encoding="utf-8")
+    except Exception as write_exc:
+        logging.exception("Failed to write error log %s: %s", error_id, write_exc)
+
+    return error_id, log_path
+
+
+def _is_empty_output_error(exc: BaseException) -> bool:
+    """Return True if *exc* is the "Claude Code returned empty output" error."""
+    return "Claude Code returned empty output" in str(exc)
 
 
 # Human-readable labels for each supervisor action (icon, short Russian description)
@@ -731,6 +807,93 @@ async def _run_execute(
     await _notify_action_result(context, plan, result)
 
 
+async def _try_create_fast(
+    update: Any,
+    context: Any,
+    user_text: str,
+    session_id: str,
+    user_id: str,
+    channel: str,
+) -> bool:
+    """Try to handle a task/bug creation request without the LLM/Supervisor.
+
+    Returns True when the request was handled (caller should return immediately),
+    False when the text did not match a creation pattern and should fall through
+    to the normal pipeline.
+    """
+    detected = telegram_create_router.detect_create_intent(user_text)
+    if detected is None:
+        # Imperative patterns ("добавить ...", "сделать ...", etc.) only fire when
+        # there is no active focus so we don't hijack in-progress task discussions.
+        # We call detect_imperative_create_intent FIRST to avoid an unnecessary
+        # get_focus() call for messages that don't match any pattern at all.
+        imperative_candidate = telegram_create_router.detect_imperative_create_intent(user_text)
+        if imperative_candidate is not None:
+            focus = get_focus(session_id, user_id=user_id, channel=channel)
+            has_focus = bool(
+                focus.get("active_task_id")
+                or focus.get("active_release_id")
+                or focus.get("active_decision_id")
+            )
+            if not has_focus:
+                detected = imperative_candidate
+    if detected is None:
+        return False
+
+    kind, title = detected
+
+    if not title:
+        if kind == "task":
+            await _reply(
+                update,
+                "Не понял название задачи. Напиши, например:\n"
+                "\"Создай задачу проверить голосовое управление проектом\"",
+            )
+        else:
+            await _reply(
+                update,
+                "Не понял название бага. Напиши, например:\n"
+                "\"Нашёл баг карточка задачи не обновляется\"",
+            )
+        return True
+
+    try:
+        if kind == "task":
+            item = telegram_create_router.create_task_fast(title)
+            icon, word = "✅", "задачу"
+        else:
+            item = telegram_create_router.create_bug_fast(title)
+            icon, word = "🐞", "баг"
+    except Exception as exc:
+        logging.exception("Fast create (%s) failed: %s", kind, exc)
+        await _reply(update, f"Ошибка при создании: {exc}")
+        return True
+
+    # Board sync — best-effort, never raises
+    board_status = "skipped"
+    try:
+        import telegram_board as _tb
+        bot = getattr(context, "bot", None) if context is not None else None
+        sync_result = await _tb.sync_task_to_board(
+            item["id"], bot=bot, source="bot:fast_create"
+        )
+        board_status = sync_result.get("status", "skipped")
+    except Exception:
+        logging.warning("Fast create board sync failed for %s", item.get("id"))
+
+    lines = [
+        f"{icon} Создал {word} {item['id']}",
+        f"Название: {item.get('title', title)}",
+        f"Статус: {item.get('status', 'idea')}",
+        f"Board: {board_status}",
+    ]
+    await _reply(update, "\n".join(lines))
+
+    # Send task card to status chat (best-effort)
+    await _send_task_card(context, item, kind)
+    return True
+
+
 async def handle_user_text(
     update: Any,
     context: Any,
@@ -775,6 +938,13 @@ async def handle_user_text(
         fast_reply = telegram_fast_router.try_route(user_text)
         if fast_reply is not None:
             await _reply(update, fast_reply)
+            return
+
+    # Create router: deterministic task/bug creation without calling LLM.
+    # Runs after the fast router (read-only queries) but before the Supervisor.
+    # Reply-to enriched messages bypass this so the Supervisor gets full context.
+    if not text.startswith("Context: user replied to"):
+        if await _try_create_fast(update, context, user_text, session_id, user_id, channel):
             return
 
     execute_mode = force_execute if force_execute is not None else not cfg["dry_run_by_default"]
@@ -1144,6 +1314,8 @@ async def voice_handler(update: Any, context: Any) -> None:
         return
 
     temp_files: list[str] = []
+    transcript: str = ""
+    stt_ok: bool = False
     try:
         work_dir = ensure_voice_work_dir()
         stem = f"voice_{uuid.uuid4().hex}"
@@ -1158,17 +1330,45 @@ async def voice_handler(update: Any, context: Any) -> None:
 
         convert_voice_to_wav(input_path.as_posix(), wav_path.as_posix())
         transcript = transcribe_audio(wav_path.as_posix())
+        stt_ok = True
 
         if not transcript.strip():
             await _reply(update, "Не смог распознать текст в голосовом.")
             return
 
         await _reply(update, f"🎙 Распознал:\n{truncate_text(transcript, limit=300)}")
-        await handle_user_text(update, context, transcript, confirmed=False, force_execute=None)
+
+        try:
+            await handle_user_text(update, context, transcript, confirmed=False, force_execute=None)
+        except Exception as downstream_exc:
+            logging.exception("Voice downstream error after successful STT: %s", downstream_exc)
+            error_id, log_path = write_error_log(
+                downstream_exc, update=update, handler_name="voice_handler:downstream"
+            )
+            await _reply(
+                update,
+                f"Голос распознан, но не удалось обработать команду: {downstream_exc}\n"
+                f"Error ID: {error_id}\n"
+                f"Лог: {log_path}",
+            )
+
     except SpeechToTextError as exc:
         await _reply(update, f"Ошибка голосового ввода: {exc}")
-    except Exception as exc:  # pragma: no cover
-        await _reply(update, f"Ошибка обработки голосового сообщения: {exc}")
+    except Exception as exc:
+        if stt_ok:
+            logging.exception("Voice post-STT error: %s", exc)
+            error_id, log_path = write_error_log(
+                exc, update=update, handler_name="voice_handler:post_stt"
+            )
+            await _reply(
+                update,
+                f"Голос распознан, но не удалось обработать команду: {exc}\n"
+                f"Error ID: {error_id}\n"
+                f"Лог: {log_path}",
+            )
+        else:
+            logging.exception("Voice STT/processing error: %s", exc)
+            await _reply(update, f"Ошибка обработки голосового сообщения: {exc}")
     finally:
         if not should_keep_voice_files():
             cleanup_voice_files(temp_files)
@@ -1376,12 +1576,31 @@ async def study_project_callback(update: Any, context: Any) -> None:
 
 
 async def error_handler(update: Any, context: Any) -> None:
-    import logging
-    logging.exception("Unhandled Telegram error", exc_info=getattr(context, "error", None))
+    exc = getattr(context, "error", None)
+    logging.exception("Unhandled Telegram error", exc_info=exc)
+
+    if exc is None:
+        return
+
+    error_id, log_path = write_error_log(exc, update=update, handler_name="error_handler")
+
     message = getattr(update, "message", None) if update is not None else None
     if message is not None:
         try:
-            await message.reply_text("Произошла внутренняя ошибка. Я её залогировал.")
+            if _is_empty_output_error(exc):
+                user_msg = (
+                    "Claude Code вернул пустой ответ. "
+                    "Возможно, закончились лимиты или CLI не смог выполнить запрос.\n"
+                    f"Error ID: {error_id}\n"
+                    f"Лог: {log_path}"
+                )
+            else:
+                user_msg = (
+                    "Произошла внутренняя ошибка.\n"
+                    f"Error ID: {error_id}\n"
+                    f"Лог: {log_path}"
+                )
+            await message.reply_text(user_msg)
         except Exception:
             pass
 
