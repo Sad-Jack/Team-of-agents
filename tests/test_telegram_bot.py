@@ -274,6 +274,8 @@ class TelegramBotTests(unittest.TestCase):
         with patch("telegram_bot.is_voice_enabled", return_value=False):
             asyncio.run(telegram_bot.voice_handler(upd, ctx))
             self.assertIn("выключен", upd.message.replies[0])
+            # Must mention how to enable
+            self.assertIn("STT_PROVIDER", upd.message.replies[0])
 
     def test_voice_handler_downloads_transcribes_and_routes(self):
         upd = _FakeUpdate(user_id=1, voice=SimpleNamespace(file_id="v1"))
@@ -295,7 +297,9 @@ class TelegramBotTests(unittest.TestCase):
                             with patch("telegram_bot.should_keep_voice_files", return_value=False):
                                 asyncio.run(telegram_bot.voice_handler(upd, ctx))
                             route_mock.assert_called_once()
-                            self.assertIn("Распознал голос", upd.message.replies[0])
+                            # replies[0] = status, replies[1] = transcript
+                            all_replies = " ".join(upd.message.replies)
+                            self.assertIn("Распознал", all_replies)
                 tmp.cleanup()
 
     def test_focus_commands(self):
@@ -1849,6 +1853,447 @@ class TestBoardFocusCallbackDM(unittest.IsolatedAsyncioTestCase):
                 await telegram_bot.board_focus_callback(upd, ctx)
         text = self._bot.send_message.call_args.kwargs.get("text", "")
         self.assertNotIn("/Users/", text)
+
+
+class TestVoiceHandler(unittest.IsolatedAsyncioTestCase):
+    """Comprehensive tests for voice_handler in telegram_bot.py."""
+
+    def _make_ctx(self, owner_id="42"):
+        from unittest.mock import AsyncMock, MagicMock
+        bot = MagicMock()
+        bot.get_file = AsyncMock(return_value=_FakeTGFile())
+        ctx = MagicMock()
+        ctx.bot = bot
+        ctx.bot_data = {"telegram_config": {"owner_id": owner_id, "dry_run_by_default": True}}
+        return ctx
+
+    def _make_upd(self, user_id="42", file_id="tg-voice-001"):
+        return _FakeUpdate(user_id=user_id, voice=SimpleNamespace(file_id=file_id))
+
+    def _patches(self, transcript="привет", keep_files=False):
+        """Convenience context manager: patches all voice internals for success path."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _patch, MagicMock
+
+        tmp = tempfile.mkdtemp()
+        tmp_path = Path(tmp)
+
+        return [
+            _patch("telegram_bot.is_voice_enabled", return_value=True),
+            _patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path),
+            _patch("telegram_bot.convert_voice_to_wav", return_value=str(tmp_path / "a.wav")),
+            _patch("telegram_bot.transcribe_audio", return_value=transcript),
+            _patch("telegram_bot.should_keep_voice_files", return_value=keep_files),
+        ]
+
+    # ------------------------------------------------------------------
+    # Access control
+    # ------------------------------------------------------------------
+
+    async def test_non_owner_denied(self):
+        """Voice from a non-owner must be silently rejected."""
+        upd = self._make_upd(user_id="999")
+        ctx = self._make_ctx(owner_id="42")
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            await telegram_bot.voice_handler(upd, ctx)
+        self.assertEqual(len(upd.message.replies), 1)
+        self.assertIn("запрещ", upd.message.replies[0].lower())
+
+    async def test_non_owner_does_not_call_pipeline(self):
+        """Pipeline must never be called for non-owner voice."""
+        upd = self._make_upd(user_id="999")
+        ctx = self._make_ctx(owner_id="42")
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.handle_user_text") as route_mock:
+                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Disabled STT
+    # ------------------------------------------------------------------
+
+    async def test_disabled_gives_friendly_message(self):
+        """When voice is disabled the reply must explain how to enable it."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        with patch("telegram_bot.is_voice_enabled", return_value=False):
+            await telegram_bot.voice_handler(upd, ctx)
+        reply = upd.message.replies[0]
+        self.assertIn("выключен", reply)
+        self.assertIn("whisper_cli", reply)
+        self.assertIn("custom_cli", reply)
+
+    async def test_disabled_does_not_call_pipeline(self):
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        with patch("telegram_bot.is_voice_enabled", return_value=False):
+            with patch("telegram_bot.handle_user_text") as route_mock:
+                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Success path
+    # ------------------------------------------------------------------
+
+    async def test_status_message_sent_before_transcript(self):
+        """A '🎙 Принял голосовое' status must appear before the transcript reply."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        patches = self._patches(transcript="создай задачу")
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patch("telegram_bot.handle_user_text"):
+                await telegram_bot.voice_handler(upd, ctx)
+        self.assertGreaterEqual(len(upd.message.replies), 2)
+        self.assertIn("Принял голосовое", upd.message.replies[0])
+
+    async def test_transcript_shown_to_user(self):
+        """The recognised text must appear in the reply to the user."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        patches = self._patches(transcript="запусти анализ")
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patch("telegram_bot.handle_user_text"):
+                await telegram_bot.voice_handler(upd, ctx)
+        all_text = " ".join(upd.message.replies)
+        self.assertIn("Распознал", all_text)
+        self.assertIn("запусти анализ", all_text)
+
+    async def test_transcript_passed_to_pipeline(self):
+        """Recognised text must be forwarded verbatim to handle_user_text."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        patches = self._patches(transcript="покажи бэклог")
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patch("telegram_bot.handle_user_text") as route_mock:
+                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_called_once()
+        _, _, passed_text = route_mock.call_args.args
+        self.assertEqual(passed_text, "покажи бэклог")
+
+    # ------------------------------------------------------------------
+    # Empty / blank transcript
+    # ------------------------------------------------------------------
+
+    async def test_empty_transcript_no_pipeline(self):
+        """Empty transcript must NOT be forwarded to the text pipeline."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        patches = self._patches(transcript="")
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patch("telegram_bot.handle_user_text") as route_mock:
+                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+
+    async def test_empty_transcript_friendly_message(self):
+        """User gets a helpful message when transcript is empty."""
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        patches = self._patches(transcript="   ")
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            with patch("telegram_bot.handle_user_text"):
+                await telegram_bot.voice_handler(upd, ctx)
+        all_text = " ".join(upd.message.replies)
+        self.assertIn("Не смог распознать", all_text)
+
+    # ------------------------------------------------------------------
+    # Error handling
+    # ------------------------------------------------------------------
+
+    async def test_ffmpeg_failure_handled(self):
+        """ffmpeg error must produce a user-friendly reply, not a crash."""
+        from speech_to_text import SpeechToTextError
+        import tempfile
+        from pathlib import Path
+        tmp_path = Path(tempfile.mkdtemp())
+
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path):
+                with patch("telegram_bot.convert_voice_to_wav",
+                           side_effect=SpeechToTextError("ffmpeg binary not found: ffmpeg")):
+                    with patch("telegram_bot.should_keep_voice_files", return_value=False):
+                        with patch("telegram_bot.handle_user_text") as route_mock:
+                            await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+        all_text = " ".join(upd.message.replies)
+        self.assertIn("Ошибка голосового ввода", all_text)
+        # Must not leak absolute paths
+        self.assertNotIn(tmp_path.as_posix(), all_text)
+
+    async def test_whisper_failure_handled(self):
+        """Whisper CLI error must produce a user-friendly reply."""
+        from speech_to_text import SpeechToTextError
+        import tempfile
+        from pathlib import Path
+        tmp_path = Path(tempfile.mkdtemp())
+
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path):
+                with patch("telegram_bot.convert_voice_to_wav"):
+                    with patch("telegram_bot.transcribe_audio",
+                               side_effect=SpeechToTextError("whisper timed out")):
+                        with patch("telegram_bot.should_keep_voice_files", return_value=False):
+                            with patch("telegram_bot.handle_user_text") as route_mock:
+                                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+        all_text = " ".join(upd.message.replies)
+        self.assertIn("Ошибка голосового ввода", all_text)
+
+    async def test_custom_cli_missing_command_handled(self):
+        """Missing STT_CUSTOM_COMMAND must produce a user-friendly reply."""
+        from speech_to_text import SpeechToTextError
+        import tempfile
+        from pathlib import Path
+        tmp_path = Path(tempfile.mkdtemp())
+
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path):
+                with patch("telegram_bot.convert_voice_to_wav"):
+                    with patch("telegram_bot.transcribe_audio",
+                               side_effect=SpeechToTextError(
+                                   "STT_CUSTOM_COMMAND is required for custom_cli provider.")):
+                        with patch("telegram_bot.should_keep_voice_files", return_value=False):
+                            with patch("telegram_bot.handle_user_text") as route_mock:
+                                await telegram_bot.voice_handler(upd, ctx)
+        route_mock.assert_not_called()
+        all_text = " ".join(upd.message.replies)
+        self.assertIn("Ошибка голосового ввода", all_text)
+
+    # ------------------------------------------------------------------
+    # Temporary files
+    # ------------------------------------------------------------------
+
+    async def test_temp_files_cleaned_when_keep_false(self):
+        """Temporary voice files must be deleted when VOICE_KEEP_FILES=false."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch as _p
+
+        tmp_path = Path(tempfile.mkdtemp())
+        # Create fake temp files so cleanup can find them
+        ogg = tmp_path / "voice_test.ogg"
+        wav = tmp_path / "voice_test.wav"
+        ogg.write_text("x")
+        wav.write_text("x")
+
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        cleanup_mock = MagicMock()
+
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path):
+                with patch("telegram_bot.convert_voice_to_wav"):
+                    with patch("telegram_bot.transcribe_audio", return_value="test"):
+                        with patch("telegram_bot.should_keep_voice_files", return_value=False):
+                            with patch("telegram_bot.cleanup_voice_files", cleanup_mock):
+                                with patch("telegram_bot.handle_user_text"):
+                                    await telegram_bot.voice_handler(upd, ctx)
+
+        cleanup_mock.assert_called_once()
+        cleaned_paths = cleanup_mock.call_args.args[0]
+        self.assertGreater(len(cleaned_paths), 0)
+
+    async def test_temp_files_kept_when_keep_true(self):
+        """Temporary voice files must NOT be deleted when VOICE_KEEP_FILES=true."""
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        tmp_path = Path(tempfile.mkdtemp())
+        upd = self._make_upd()
+        ctx = self._make_ctx()
+        cleanup_mock = MagicMock()
+
+        with patch("telegram_bot.is_voice_enabled", return_value=True):
+            with patch("telegram_bot.ensure_voice_work_dir", return_value=tmp_path):
+                with patch("telegram_bot.convert_voice_to_wav"):
+                    with patch("telegram_bot.transcribe_audio", return_value="test"):
+                        with patch("telegram_bot.should_keep_voice_files", return_value=True):
+                            with patch("telegram_bot.cleanup_voice_files", cleanup_mock):
+                                with patch("telegram_bot.handle_user_text"):
+                                    await telegram_bot.voice_handler(upd, ctx)
+
+        cleanup_mock.assert_not_called()
+
+
+class TestBoardSyncAfterAction(unittest.IsolatedAsyncioTestCase):
+    """_board_sync_after_action and _notify_action_result trigger board sync for state-changing actions."""
+
+    def _make_ctx(self):
+        from unittest.mock import MagicMock, AsyncMock
+        ctx = MagicMock()
+        ctx.bot = MagicMock()
+        ctx.bot.send_message = AsyncMock()
+        return ctx
+
+    def _plan(self, action_name, args=None):
+        return {
+            "intent": "execute",
+            "action": {"name": action_name, "args": args or {}},
+        }
+
+    def _result(self, action_name, raw_result):
+        return {"executed": True, "action": action_name, "result": raw_result}
+
+    async def test_create_task_syncs_board(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "created", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "create_task",
+                {},
+                self._result("create_task", {"id": "TASK-5", "title": "T", "status": "idea"}),
+            )
+        self.assertIn("TASK-5", synced)
+
+    async def test_create_bug_syncs_board(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "created", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "create_bug",
+                {},
+                self._result("create_bug", {"id": "BUG-1", "title": "B", "status": "idea"}),
+            )
+        self.assertIn("BUG-1", synced)
+
+    async def test_run_next_syncs_by_action_args_id(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "run_next",
+                {"id": "TASK-1"},
+                self._result("run_next", {"task": {"id": "TASK-1", "status": "ready_for_dev"}, "message": "ok"}),
+            )
+        self.assertIn("TASK-1", synced)
+
+    async def test_run_next_syncs_by_task_dict_when_no_args_id(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "run_next",
+                {},
+                self._result("run_next", {"task": {"id": "TASK-2", "status": "in_progress"}, "message": "ok"}),
+            )
+        self.assertIn("TASK-2", synced)
+
+    async def test_advance_task_safely_syncs_board(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "advance_task_safely",
+                {"id": "TASK-3"},
+                self._result("advance_task_safely", {"task_id": "TASK-3", "final_status": "in_progress"}),
+            )
+        self.assertIn("TASK-3", synced)
+
+    async def test_prepare_task_for_dev_syncs_board(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "prepare_task_for_dev",
+                {"id": "TASK-4"},
+                self._result("prepare_task_for_dev", {"task_id": "TASK-4", "final_status": "ready_for_dev"}),
+            )
+        self.assertIn("TASK-4", synced)
+
+    async def test_run_all_syncs_all_tasks(self):
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "run_all",
+                {},
+                self._result("run_all", [
+                    {"id": "TASK-1", "status": "in_progress"},
+                    {"id": "TASK-2", "status": "done"},
+                ]),
+            )
+        self.assertIn("TASK-1", synced)
+        self.assertIn("TASK-2", synced)
+
+    async def test_non_state_action_no_sync(self):
+        """list_tasks, show_task etc. must not trigger board sync."""
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "updated", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                ctx,
+                "list_tasks",
+                {},
+                self._result("list_tasks", []),
+            )
+        self.assertEqual(synced, [])
+
+    async def test_none_context_no_crash(self):
+        """context=None should not raise."""
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "skipped", "task_id": task_id}
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            await telegram_bot._board_sync_after_action(
+                None,
+                "create_task",
+                {},
+                self._result("create_task", {"id": "TASK-X", "status": "idea"}),
+            )
+        # Sync can still be called with bot=None — shouldn't raise
+
+    async def test_notify_action_result_calls_board_sync(self):
+        """_notify_action_result triggers _board_sync_after_action for create_task."""
+        ctx = self._make_ctx()
+        synced = []
+        async def _fake_sync(task_id, *, bot=None, source="system"):
+            synced.append(task_id)
+            return {"status": "created", "task_id": task_id}
+        plan = self._plan("create_task")
+        result = self._result("create_task", {"id": "TASK-7", "title": "T", "status": "idea"})
+        with patch("telegram_board.sync_task_to_board", _fake_sync):
+            with patch("telegram_bot.get_status_chat_id", return_value=None):
+                await telegram_bot._notify_action_result(ctx, plan, result)
+        self.assertIn("TASK-7", synced)
 
 
 if __name__ == "__main__":

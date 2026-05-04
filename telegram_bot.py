@@ -570,6 +570,64 @@ async def _send_task_card(context: Any, item: dict, work_item_type: str) -> None
         logging.exception("Failed to send task card to status chat")
 
 
+# Actions that mutate task state and should trigger an automatic Board card sync.
+_BOARD_SYNC_ACTIONS: frozenset[str] = frozenset({
+    "create_task",
+    "create_bug",
+    "run_next",
+    "run_all",
+    "advance_task_safely",
+    "prepare_task_for_dev",
+})
+
+
+async def _board_sync_after_action(
+    context: Any,
+    action_name: str,
+    action_args: dict,
+    result: dict,
+) -> None:
+    """Sync affected task(s) to the Telegram Board after a state-changing action.
+
+    Uses ``context.bot`` when available so no extra Bot instance is created.
+    Never raises — all errors are logged at WARNING level.
+    """
+    if action_name not in _BOARD_SYNC_ACTIONS:
+        return
+    try:
+        import telegram_board as _tb
+    except ImportError:
+        return
+
+    bot = getattr(context, "bot", None) if context is not None else None
+    raw = result.get("result")
+
+    if action_name == "run_all":
+        # run_all returns a list of {id, status, ...} items
+        items = raw if isinstance(raw, list) else []
+        for item in items:
+            tid = item.get("id") if isinstance(item, dict) else None
+            if tid:
+                await _tb.sync_task_to_board(tid, bot=bot, source="bot:run_all")
+        return
+
+    # --- single-task actions ---
+    if action_name in {"create_task", "create_bug"}:
+        task_id = raw.get("id") if isinstance(raw, dict) else None
+    else:
+        # run_next result: {"task": {id, ...}, "message": "..."}
+        # advance_task_safely / prepare_task_for_dev result: {"task_id": ..., ...}
+        r = raw if isinstance(raw, dict) else {}
+        task_id = (
+            action_args.get("id")
+            or r.get("task_id")
+            or (r.get("task") or {}).get("id")
+        )
+
+    if task_id:
+        await _tb.sync_task_to_board(task_id, bot=bot, source=f"bot:{action_name}")
+
+
 async def _notify_action_result(context: Any, plan: dict, result: dict) -> None:
     if context is None:
         return
@@ -587,6 +645,8 @@ async def _notify_action_result(context: Any, plan: dict, result: dict) -> None:
         task_id = action_args.get("task_id") or action_args.get("id") or r.get("task_id") or "?"
         status = r.get("final_status") or r.get("status") or "?"
         await send_status_notification(context, f"✅ Работа по {task_id} завершена\nНовый статус: {status}")
+
+    await _board_sync_after_action(context, action_name, action_args, result)
 
 
 async def _run_execute(
@@ -1051,10 +1111,14 @@ async def text_handler(update: Any, context: Any) -> None:
 async def voice_handler(update: Any, context: Any) -> None:
     cfg = context.bot_data["telegram_config"]
     if not is_owner(update, cfg["owner_id"]):
-        await _reply(update, "Access denied.")
+        await _reply(update, "Доступ запрещён.")
         return
     if not is_voice_enabled():
-        await _reply(update, "Голосовой ввод пока выключен. Настрой STT_PROVIDER.")
+        await _reply(
+            update,
+            "Голосовой ввод пока выключен. "
+            "Включи STT_PROVIDER=whisper_cli или STT_PROVIDER=custom_cli.",
+        )
         return
 
     message = getattr(update, "message", None)
@@ -1074,9 +1138,16 @@ async def voice_handler(update: Any, context: Any) -> None:
         tg_file = await context.bot.get_file(voice.file_id)
         await tg_file.download_to_drive(custom_path=input_path.as_posix())
 
+        await _reply(update, "🎙 Принял голосовое. Расшифровываю...")
+
         convert_voice_to_wav(input_path.as_posix(), wav_path.as_posix())
         transcript = transcribe_audio(wav_path.as_posix())
-        await _reply(update, f"Распознал голос: {truncate_text(transcript, limit=300)}")
+
+        if not transcript.strip():
+            await _reply(update, "Не смог распознать текст в голосовом.")
+            return
+
+        await _reply(update, f"🎙 Распознал:\n{truncate_text(transcript, limit=300)}")
         await handle_user_text(update, context, transcript, confirmed=False, force_execute=None)
     except SpeechToTextError as exc:
         await _reply(update, f"Ошибка голосового ввода: {exc}")
