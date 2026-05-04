@@ -1,0 +1,20 @@
+[
+  {
+    "id": "TASK-1",
+    "type": "feature",
+    "title": "Example task",
+    "description": "This is an example task. Replace with your real tasks after running: python3 run.py storage-init",
+    "status": "idea",
+    "priority": "medium",
+    "depends_on": [],
+    "blocked_by": [],
+    "blocked_reason": "",
+    "tags": [],
+    "estimate": null,
+    "release_id": null,
+    "artifacts": {},
+    "history": [],
+    "notes": [],
+    "related_decisions": []
+  }
+]

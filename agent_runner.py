@@ -1,4 +1,5 @@
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -7,6 +8,79 @@ from decision_context_loader import load_decision_context_for_task
 from project_context_loader import load_project_context_text, list_project_context_files
 
 AGENTS_DIR = Path("agents")
+
+
+def _extract_agent_json(raw: str, agent_name: str) -> dict:
+    """Parse a JSON object from raw LLM output, tolerating markdown fences.
+
+    Tries three strategies in order:
+    1. Direct ``json.loads`` (fast path for plain JSON).
+    2. Strip a markdown code-fence (``\\`\\`\\`json … \\`\\`\\``` or ``\\`\\`\\` … \\`\\`\\```) and retry.
+    3. Scan for the first balanced ``{ … }`` block in the string.
+
+    Raises ``LLMClientError`` if no valid JSON object can be found.
+    """
+    if not raw or not raw.strip():
+        raise LLMClientError(
+            f"Agent '{agent_name}' returned empty output. "
+            "Claude Code returned empty output."
+        )
+
+    # 1 — direct parse (fastest path, works for plain JSON output)
+    try:
+        result = json.loads(raw.strip())
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # 2 — strip markdown fence (```json … ``` or ``` … ```)
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if fence_match:
+        try:
+            result = json.loads(fence_match.group(1).strip())
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # 3 — find the first balanced { … } object, respecting string literals
+    start = raw.find("{")
+    if start >= 0:
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(raw)):
+            ch = raw[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start : i + 1]
+                    try:
+                        result = json.loads(candidate)
+                        if isinstance(result, dict):
+                            return result
+                    except json.JSONDecodeError:
+                        pass
+                    break
+
+    preview = raw[:500]
+    raise LLMClientError(
+        f"Agent '{agent_name}' returned invalid JSON. Raw output: {preview}"
+    )
 AGENT_FILES = {
     "analyst": "analyst.md",
     "architect": "architect.md",
@@ -155,13 +229,7 @@ def run_agent(agent_name: str, task: dict, llm_client=None) -> dict:
     }
 
     raw_output = client.generate(payload)
-
-    try:
-        parsed = json.loads(raw_output)
-    except json.JSONDecodeError as exc:
-        raise LLMClientError(
-            f"Agent '{agent_name}' returned invalid JSON: {exc}. Raw output: {raw_output}"
-        ) from exc
+    parsed = _extract_agent_json(raw_output, agent_name)
 
     if not isinstance(parsed, dict):
         raise LLMClientError(f"Agent '{agent_name}' output must be a JSON object.")

@@ -696,3 +696,49 @@ CLI:
 - `python3 run.py focus-release --id REL-001`
 - `python3 run.py focus-decision --id ADR-001`
 - `python3 run.py clear-focus`
+
+---
+
+## Local runtime state
+
+Runtime/state files are **not committed** to the repository.  
+They live locally and are listed in `.gitignore`.
+
+| Path | What it is |
+|------|------------|
+| `tasks/tasks.json` | Task backlog |
+| `releases/releases.json` | Release records |
+| `decisions/index.json` | Decision index (ADR registry) |
+| `sessions/sessions.json` | Conversation sessions |
+| `sessions/telegram_message_links.json` | Telegram message→task mapping |
+| `data/team_agents.db` | SQLite storage (if `STORAGE_BACKEND=sqlite`) |
+| `artifacts/<TASK-*>/` | Generated agent outputs |
+| `.tmp/` | Temporary files, voice recordings, CI logs |
+
+### Initialise a fresh local state
+
+```bash
+python3 run.py storage-init
+```
+
+This creates empty `tasks/tasks.json`, `releases/releases.json`, `decisions/index.json`, and `sessions/sessions.json` if they don't exist.
+
+### Backup local state
+
+```bash
+cp -r tasks/ releases/ decisions/ sessions/ data/ ~/my-backup/
+```
+
+### What must never be committed
+
+- `tasks/*.json`, `releases/*.json`, `decisions/*.json` — runtime project data
+- `sessions/*.json` — user sessions and Telegram mappings
+- `data/*.db` / `data/*.sqlite` — SQLite database
+- `.tmp/` — temp files and logs
+- `.env` — secrets and tokens
+
+### Verify gitignore is correct
+
+```bash
+./scripts/check_gitignore.sh
+```

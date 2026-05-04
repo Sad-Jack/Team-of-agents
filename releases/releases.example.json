@@ -1,0 +1,15 @@
+[
+  {
+    "id": "REL-001",
+    "name": "v0.1.0",
+    "description": "Example release. Replace with your real releases after running: python3 run.py storage-init",
+    "status": "planned",
+    "created_at": "2026-01-01T00:00:00Z",
+    "target_date": null,
+    "tasks": [],
+    "notes": "",
+    "risks": [],
+    "rollback_plan": "",
+    "history": []
+  }
+]

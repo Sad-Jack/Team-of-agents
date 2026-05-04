@@ -1,47 +1,113 @@
+# =============================================================================
 # macOS
+# =============================================================================
 .DS_Store
 
-# IDE
+# =============================================================================
+# IDE / editor
+# =============================================================================
 .idea/
 .vscode/
 
-# Logs
-*.log
-
-# Env
-.env
-.env.*
-
-# Node
-node_modules/
-
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 venv/
 
-# Build
+# =============================================================================
+# Build artefacts
+# =============================================================================
 build/
 dist/
+*.egg-info/
 
-# Temporary voice files
+# =============================================================================
+# Environment / secrets  (NEVER commit .env)
+# =============================================================================
+.env
+.env.*
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+logs/
+
+# =============================================================================
+# Temporary files (voice, test runs, CI artefacts)
+# =============================================================================
 .tmp/
 *.wav
 *.ogg
 *.opus
 
-# Local runtime / secrets
-.env
-.venv/
+# =============================================================================
+# Node.js (in case of any JS tooling)
+# =============================================================================
+node_modules/
+
+# =============================================================================
+# Claude / tool caches
+# =============================================================================
 .claude/
-.tmp/
-.idea/
 
-# Local storage
-data/
-sessions/
+# =============================================================================
+# Team of Agents — LOCAL RUNTIME STATE
+#
+# These files are created at runtime (tasks, releases, decisions index,
+# sessions, generated artefacts, SQLite DB).  They must NOT be committed.
+#
+# To initialise an empty local state run:
+#   python3 run.py storage-init
+#
+# To back up local state copy:
+#   tasks/  releases/  decisions/*.json  sessions/  data/
+# =============================================================================
 
-# Python cache
-__pycache__/
-*.pyc
+# --- Task / release / decision state -----------------------------------------
+tasks/*.json
+releases/*.json
+decisions/*.json
+
+# --- Session state -----------------------------------------------------------
+sessions/*.json
+
+# --- Generated artefacts (per-task output from agents) -----------------------
+artifacts/**
+!artifacts/.gitkeep
+
+# --- Work-item generated files (JSON output, not instruction templates) ------
+work-items/**/*.json
+work-items/**/*.md.generated
+
+# --- SQLite database files ---------------------------------------------------
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# --- Telegram runtime mappings (message-link store, board state) -------------
+*message_links*.json
+*telegram*links*.json
+*board*links*.json
+sessions/telegram_message_links.json
+
+# =============================================================================
+# Always-tracked files: .gitkeep placeholders and *.example.json bootstraps
+# =============================================================================
+!tasks/.gitkeep
+!releases/.gitkeep
+!decisions/.gitkeep
+!sessions/.gitkeep
+!artifacts/.gitkeep
+!work-items/.gitkeep
+!data/.gitkeep
+
+# Example / template files that new users copy to bootstrap local state
+!tasks/*.example.json
+!releases/*.example.json
+!decisions/*.example.json
